@@ -155,7 +155,7 @@ export class WGPUFullQuadPass<I extends string, O extends string> {
       this._device.queue.writeBuffer(
         this._uniformBuffers[uniform.label],
         0,
-        data
+        data as BufferSource
       );
     });
   }
@@ -228,7 +228,7 @@ export class WGPUFullQuadPass<I extends string, O extends string> {
     this._device.queue.writeBuffer(
       buffer,
       0,
-      getUniformBuffer(data, this._uniformsMap[label].type)
+      getUniformBuffer(data, this._uniformsMap[label].type) as BufferSource
     );
   }
 
