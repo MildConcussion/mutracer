@@ -9,20 +9,28 @@ import { createIntersectionAlphaWgsl } from './intersectionAlpha.wgsl.js';
 
 const displacementWgsl = pdm_displacementWgsl;
 
-const flatIntersectCode = function () {
+/**
+ * A rejected candidate leaves the closest hit so far, its face normal
+ * included, untouched. `maskTest` filters alpha-MASK cut-outs during
+ * closest-hit traversal (intersectionMaskRejects).
+ */
+const flatIntersectCode = function (maskTest = false) {
   return /* wgsl */ `
 let hit = intersectTriangle(o, d, tri, maxDim, shear, tMax);
 if (hit.t > 0.0) {
   let e1 = tri.p1 - tri.p0;
   let e2 = tri.p2 - tri.p0;
-  hitNormal = normalize(cross(e1, e2));
+  let candidateNormal = normalize(cross(e1, e2));
   let sideMaterialIndex = i32(unpackMaterialIndex(bitcast<i32>(insData.z)).x);
   let materialDoubleSided = materialsBuffer[sideMaterialIndex].doubleSided > 0.5;
-  if (!doubleSided && !materialDoubleSided && dot(hitNormal, d) > 0.0) {
-    hitNormal = vec3f(0.0);
+  if (!doubleSided && !materialDoubleSided && dot(candidateNormal, d) > 0.0) {
     continue;
   }
+  ${maskTest ? /* wgsl */ `if (HAS_ALPHA && intersectionMaskRejects(sideMaterialIndex, index, hit.barycentric)) {
+    continue;
+  }` : ''}
 
+  hitNormal = candidateNormal;
   tMax = hit.t;
   isHit = true;
   isHitCurrent = true;
@@ -53,7 +61,7 @@ function getPDMDisplacmentCode(anyHit: boolean) {
 `;
 }
 
-const displacementIntersectCode = function (anyHit: boolean, hasAnisotropyDirections: boolean) {
+const displacementIntersectCode = function (anyHit: boolean, hasAnisotropyDirections: boolean, maskTest = false) {
   return /* wgsl */ `
 
 let hScale = insData.w;
@@ -97,7 +105,7 @@ if (abs(hScale) > 0.0 && minMaxH > 0) {
   }
 }
 else {
-  ${flatIntersectCode()}
+  ${flatIntersectCode(maskTest)}
 }
 `;
 };
@@ -213,7 +221,8 @@ function getBVHTraverseCode(
   anyHit: boolean,
   blasLayoutMask: number,
   hasAnisotropyDirections: boolean,
-  skipTriangleCode = ''
+  skipTriangleCode = '',
+  maskTest = false
 ) {
   const intersectTriangles = /* wgsl */ `
       let insData = instancesBuffer[insIdx * ${INSTANCE_VEC4_STRIDE}];
@@ -235,8 +244,8 @@ function getBVHTraverseCode(
         var isHitCurrent = false;
 
         ${hasDisplacement
-          ? displacementIntersectCode(anyHit, hasAnisotropyDirections)
-          : flatIntersectCode()}
+          ? displacementIntersectCode(anyHit, hasAnisotropyDirections, maskTest)
+          : flatIntersectCode(maskTest)}
         if (isHitCurrent) {
           ${handleHitCode}
         }
@@ -1320,7 +1329,9 @@ hitInsIdx = insIdx;
     hasDisplacement,
     false,
     blasLayoutMask,
-    hasAnisotropyDirections
+    hasAnisotropyDirections,
+    '',
+    true
   )}
 
   if (isHit) {
