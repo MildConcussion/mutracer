@@ -30,6 +30,15 @@ export class CommittedScene {
       context.drawImage(source, 0, 0);
       return canvas as T;
     }
+    // ImageData is a valid TextureDataSource, but its data is a prototype getter the generic copy cannot set.
+    if (typeof ImageData !== 'undefined' && object instanceof ImageData) {
+      const previous = this.copies.get(object) as ImageData | undefined;
+      if (previous && previous.width === object.width && previous.height === object.height) {
+        previous.data.set(object.data); return previous as T;
+      }
+      const cloned = new ImageData(new Uint8ClampedArray(object.data), object.width, object.height);
+      this.copies.set(object, cloned); return cloned as T;
+    }
     if (typeof Node !== 'undefined' && object instanceof Node) return value;
     if (value instanceof Geometry && this.geometryVersions.get(value) === value.version) return this.copies.get(value);
     if (ArrayBuffer.isView(value)) {
