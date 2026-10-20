@@ -184,7 +184,7 @@ function createDataAtlasPage(
   const domPlacements = page.placements.filter(p => !isTextureDataSource(textures[p.index].image));
   if (domPlacements.length) {
     const canvas = createAtlasCanvas(width, height);
-    const context = canvas.getContext('2d');
+    const context = canvas.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
     if (!context) throw new Error('Unable to create a canvas for the texture atlas.');
     for (const placement of domPlacements) drawAtlasImage(context, placement, textures[placement.index]);
     const pixels = context.getImageData(0, 0, width, height).data;
@@ -361,7 +361,7 @@ function makeTextureArray(
       return createDataAtlasPage(atlasWidth, atlasHeight, page, textures, floatStorage);
     }
     const canvas = createAtlasCanvas(atlasWidth, atlasHeight);
-    const context = canvas.getContext('2d');
+    const context = canvas.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
     if (!context) {
       throw new Error('Unable to create a canvas for the texture atlas.');
     }
