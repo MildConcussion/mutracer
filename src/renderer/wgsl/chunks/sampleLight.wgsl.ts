@@ -341,7 +341,11 @@ fn sampleLightChoiceTable(
   if (choice.sourceType == ${LIGHT_CHOICE_ENVIRONMENT}) {
     (*lightSample).sourceType = 0u;
     (*lightSample).sourceIndex = u32(choice.sourceIndex);
-    sampleEnvLight(rnd.xy, lightSample);
+    if (HAS_ENV_PORTALS) {
+      sampleEnvLightFrom(scatterPos, rnd.xy, lightSample);
+    } else {
+      sampleEnvLight(rnd.xy, lightSample);
+    }
     (*lightSample).selectionPmf = rtUniform.envLightPmf;
     (*lightSample).pdf *= rtUniform.envLightPmf;
   }

@@ -39,6 +39,8 @@ import {
   generateBackgroundMapFromSceneBackground
 } from './envMapCreation.js';
 import rayTraceCompute, { WORKGROUP_SIZE } from './wgsl/rayTrace.compute.js';
+import { packEnvPortals, ENV_PORTALS_UNIFORM_BYTES } from './envPortals.js';
+import type { EnvironmentPortals } from '../scene/EnvironmentLight.js';
 import Geometry from '../scene/Geometry.js';
 import {
   CONSTANT_DIRECTIONAL_LIGHT,
@@ -347,6 +349,10 @@ class WGPURayTracePass {
   private _dirtyColorMeshes = new Set<Mesh>();
   private _geometriesNeedRefit = new Set<Geometry>();
   private _needsUpdateAnalyticLightsBuffer = true;
+  private _envPortalsData = new Float32Array(ENV_PORTALS_UNIFORM_BYTES / 4);
+  private _envPortals: EnvironmentPortals | undefined;
+  private _roomLightChoices = new LightChoiceBuffer();
+  private _needsUpdateEnvPortals = true;
 
   private _activeTarget: object = {};
   private _targetOutputs = new Map<object, { buffers: GPUBuffer[]; bindGroup?: GPUBindGroup; pipeline?: GPUComputePipeline }>();
@@ -383,6 +389,7 @@ class WGPURayTracePass {
     cameraUniform: GPUBuffer;
     rtUniform: GPUBuffer;
     analyticLights: GPUBuffer;
+    envPortals: GPUBuffer;
   };
   private _rtUniform = makeRayTraceUniform();
   private _mapInfoUniform!: GPUBuffer;
@@ -441,7 +448,8 @@ class WGPURayTracePass {
     USE_BACKGROUND_MAP: false,
     USE_GROUNDED_BACKGROUND: false,
     SAMPLING_PATTERN: 0,
-    BEVEL_SAMPLES: DEFAULT_BEVEL_SAMPLES
+    BEVEL_SAMPLES: DEFAULT_BEVEL_SAMPLES,
+    HAS_ENV_PORTALS: false
   };
   private _prevPipelineConstants: Record<string, boolean | number> = {};
   private _prevDefinesCode = '';
@@ -489,7 +497,8 @@ class WGPURayTracePass {
       rtUniform: this._uniformBuffer(this._rtUniform.buffer.byteLength),
       analyticLights: this._uniformBuffer(
         FIXED_LIGHT_COUNT * PIXELS_PER_LIGHT * 4 * 4
-      )
+      ),
+      envPortals: this._uniformBuffer(ENV_PORTALS_UNIFORM_BYTES)
     };
     this._mapInfoUniform = this._uniformBuffer(4 * 4);
 
@@ -1514,6 +1523,10 @@ ${rayTraceCompute({
       );
       this._needsUpdateAnalyticLightsBuffer = false;
     }
+    if (this._needsUpdateEnvPortals) {
+      this._device.queue.writeBuffer(this._uniforms.envPortals, 0, this._envPortalsData);
+      this._needsUpdateEnvPortals = false;
+    }
 
     const dispatchWidth = Math.ceil(this._width / tiles[0]);
     const dispatchHeight = Math.ceil(this._height / tiles[1]);
@@ -2105,11 +2118,26 @@ ${rayTraceCompute({
       else this._emissiveTriangles[source].selectionPmf = pmf;
     }
     this._lightDomainDiagnostics = domainDiagnostics;
+    // A room photo's room draws its NEE candidates from the same choices without the directional lights, which take
+    // a shadow ray each there (DirectSunInRoom); the table follows the main one
+    const roomChoices = this._roomLightChoices;
+    roomChoices.reserve(this._envPortals ? choices.count : 0);
+    let directionalPmf = 0;
+    for (let i = 0; this._envPortals && i < choices.count; i++) {
+      const type = choices.sourceTypes[i], source = choices.sourceIndices[i];
+      if (type === LIGHT_CHOICE_ANALYTIC && this._analyticLights[source]?.type === 'DirectionalLight') directionalPmf += distribution.pmfs[i];
+      else roomChoices.push(type, source, choices.weights[i]);
+    }
+    const roomDistribution = roomChoices.count ? buildLightAliasTable(roomChoices) : undefined;
+    packEnvPortals(this._envPortalsData, this._envPortals, roomDistribution && directionalPmf < 1 ? {
+      tableOffset: Math.max(choices.count, 1), choiceCount: roomChoices.count, pmfScale: 1 / (1 - directionalPmf)
+    } : undefined);
+    this._needsUpdateEnvPortals = true;
     this._rtUniform.views.lightChoiceCount[0] = choices.count;
     this._rtUniform.views.lightWeightTotal[0] = distribution.totalWeight;
 
     const emissiveTexels = this._emissiveTriangles.length * 6;
-    const choiceTexels = Math.max(choices.count, 1);
+    const choiceTexels = Math.max(choices.count, 1) + (roomDistribution ? roomChoices.count : 0);
     const profileStartTexel = emissiveTexels + choiceTexels;
     const packedIES = packIESProfiles(this._analyticLights, profileStartTexel);
     this._iesProfileTexelOffsets = packedIES.offsets;
@@ -2149,6 +2177,9 @@ ${rayTraceCompute({
       distribution.choices,
       emissiveTexels * 4
     );
+    if (roomDistribution) {
+      new Uint32Array(textureData.buffer).set(roomDistribution.choices, (emissiveTexels + Math.max(choices.count, 1)) * 4);
+    }
     textureData.set(packedIES.data, profileStartTexel * 4);
     const previous = this._lightSamplingData;
     const full = resized || !previous || this._lightSamplingTriangleCount !== this._emissiveTriangles.length;
@@ -2714,6 +2745,10 @@ ${rayTraceCompute({
     this._rtUniform.views.lightsCount[0] = numAnalyticLights;
 
     this._setEnvMap(envImage);
+    const environment = lights.find((light) => light.type === 'EnvironmentLight');
+    this._envPortals = envImage && environment?.type === 'EnvironmentLight' ? environment.portals : undefined;
+    this._constants.HAS_ENV_PORTALS = packEnvPortals(this._envPortalsData, this._envPortals) > 0;
+    this._needsUpdateEnvPortals = true;
 
     const lightTexturesChanged = this._rectLightTextures.update(analyticLights);
     this._analyticLights = analyticLights;
