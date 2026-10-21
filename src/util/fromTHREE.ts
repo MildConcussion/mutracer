@@ -650,6 +650,15 @@ interface ConversionStore {
   warned: WeakSet<THREE.Object3D>;
   background?: Scene['background'];
 }
+/**
+ * Names an object in a warning. Warnings pass text, not the object: console
+ * capture that serializes its arguments (dev-server log forwarding) would walk
+ * the object's whole scene graph, which took 40 s for a 290k-instance scene.
+ */
+function describeObject(object: THREE.Object3D) {
+  return `${object.type}${object.name ? ` "${object.name}"` : ''}`;
+}
+
 function createConversionStore(): ConversionStore {
   return { updateId: 0, textures: new WeakMap(), materials: new WeakMap(), geometries: new WeakMap(),
     materialHooks: new WeakMap(), lightHooks: new WeakMap(),
@@ -839,7 +848,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
       // A null result rejects the source mesh, including all of its groups/instances.
       if (childMaterials.some(material => materialHook(material) === null)) return;
       if (!child.geometry) {
-        console.warn(child, 'must have a geometry property');
+        console.warn(`${describeObject(child)} must have a geometry property`);
       } else if (
         childMaterials.some(
           (material) =>
@@ -850,15 +859,14 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
         )
       ) {
         console.warn(
-          child,
-          'must use MeshStandardMaterial or MeshBasicMaterial in order to be rendered.'
+          `${describeObject(child)} must use MeshStandardMaterial or MeshBasicMaterial in order to be rendered.`
         );
       } else {
         const instanced = child as THREE.InstancedMesh;
         const unsupported = (child as THREE.Mesh & { isBatchedMesh?: boolean }).isBatchedMesh ||
           instanced.isInstancedMesh && (!!instanced.morphTexture || (child as THREE.SkinnedMesh).isSkinnedMesh);
         if (unsupported && !store.warned.has(child)) {
-          console.warn('MuTracer: BatchedMesh, instanced morph targets and skinned instancing are not supported; converting as an ordinary mesh.', child);
+          console.warn(`MuTracer: BatchedMesh, instanced morph targets and skinned instancing are not supported; converting ${describeObject(child)} as an ordinary mesh.`);
           store.warned.add(child);
         }
         const expand = instanced.isInstancedMesh && !unsupported;

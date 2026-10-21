@@ -65,8 +65,10 @@ function growBin(
  * Builds a binary BVH over axis-aligned boxes.
  * @param aabbs min x, y, z, max x, y, z for each primitive.
  * @param count number of primitives in `aabbs`.
+ * @param intersectionCost cost of one primitive relative to one node
+ *   traversal (C_TRAV = 1). Default 1, as TinyBVH for triangles.
  */
-export function buildBinnedSahBvh(aabbs: Float32Array, count: number): BinnedSahBvh {
+export function buildBinnedSahBvh(aabbs: Float32Array, count: number, intersectionCost = C_INT): BinnedSahBvh {
   const capacity = Math.max(1, count * 2 - 1);
   const bounds = new Float32Array(capacity * 6);
   const leftFirst = new Uint32Array(capacity);
@@ -177,9 +179,9 @@ export function buildBinnedSahBvh(aabbs: Float32Array, count: number): BinnedSah
           }
         }
       }
-      splitCost = C_TRAV + C_INT * splitCost / area;
+      splitCost = C_TRAV + intersectionCost * splitCost / area;
       // Not splitting is better (also stops on non-finite bounds).
-      if (!(splitCost < nodePrims * C_INT)) break;
+      if (!(splitCost < nodePrims * intersectionCost)) break;
 
       // In-place partition by the chosen bin.
       const scale = bestAxis === 0 ? scaleX : bestAxis === 1 ? scaleY : scaleZ;

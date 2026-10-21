@@ -344,6 +344,14 @@ function writeInstanceRecord(
 }
 
 /**
+ * SAH cost of visiting one TLAS instance relative to one node test: loading its
+ * matrix, transforming the ray and entering its BLAS cost about four box tests.
+ * With the triangle cost of 1, dense forests (290k tree-part instances) kept
+ * many-instance leaves; 4 made the vaadi house view 1.26x faster.
+ */
+const TLAS_INSTANCE_COST = 4;
+
+/**
  * Builds a BVH2 TLAS over the instances. Leaves store
  * (instance record, BLAS offset, source instance index, 0); instance records
  * are written in leaf order to instancesBuffer.
@@ -359,7 +367,7 @@ export function buildTLAS(
     instanceBounds(readMeshInstance(instances, i), aabbs, i * 6);
   }
 
-  const bvh = buildBinnedSahBvh(aabbs, instances.length);
+  const bvh = buildBinnedSahBvh(aabbs, instances.length, TLAS_INSTANCE_COST);
   const { order, offsets, vec4Count, maxDepth, maxLeafPrimitives } = layoutBvh2(bvh);
   const { bounds, leftFirst, primCount, primIndices } = bvh;
   const buffer = new ArrayBuffer(vec4Count * 16);
