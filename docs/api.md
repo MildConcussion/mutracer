@@ -123,7 +123,9 @@ other sequences retain their completed samples.
 The path loop allows at most `min(bounces * 3, 20)` events, including transmission,
 alpha skips and escape checks. Opaque paths also have their own scattering-depth
 termination. This event budget can truncate deep transparent paths even when
-the requested scattering depth is larger. Intel Mac WebGL retains its driver
+the requested scattering depth is larger. Thin panes ([window glass](./materials.md#window-glass))
+spend no scattering depth, and past either limit a path still crosses the panes
+in its way to the light behind them. Intel Mac WebGL retains its driver
 workaround: `min(bounces, 3)` loop events, doubled for scenes with transmission
 or alpha, plus its existing early depth termination.
 

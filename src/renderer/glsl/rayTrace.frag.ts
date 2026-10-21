@@ -45,9 +45,18 @@ for(int _idx_ = 0; _idx_ < BOUNCES; _idx_++) {{
 const bounceCodeOnOther = glsl`
 bool isOpaque = !si.isTransparency;
 int activeBounceLimit = min(BOUNCES, bounceLimit);
-for(int idx = 0; idx < min(BOUNCES * 3, ${MAX_PATH_EVENTS}); idx++) {
-  if (isOpaque && idx - path.paneEvents > activeBounceLimit) {
-    path.abort = true;
+int eventLimit = min(BOUNCES * 3, ${MAX_PATH_EVENTS});
+for(int idx = 0; idx < min(BOUNCES * 3, ${MAX_PATH_EVENTS}) + ${MAX_PATH_EVENTS}; idx++) {
+  if (idx >= eventLimit || (isOpaque && idx - path.paneEvents > activeBounceLimit)) {
+    // The last vertex's BSDF ray still crosses the thin panes in its way to
+    // the light behind them, which that vertex's NEE weighed itself against
+    // (its shadow ray crosses them too). Anything else ends the path.
+    if (si.hit && mat.thinPane) {
+      path.pastLastVertex = true;
+    }
+    else {
+      path.abort = true;
+    }
   }
   if (path.abort) {
     return vec4(path.li, path.alpha);
@@ -487,6 +496,7 @@ vec4 integrateOnePathSample(SurfaceInteraction si, Ray ray, OpenPbrResolvedMater
   path.paneEvents = 0;
   path.paneCrossed = false;
   path.paneOrigin = ray.o;
+  path.pastLastVertex = false;
   int depth = 0;
 ${intelMac ? bounceCodeOnIntelMac : bounceCodeOnOther}
   return vec4(path.li, path.alpha);

@@ -169,6 +169,9 @@ struct Path {
   // is that vertex's ray origin, for MIS of the light reached behind it.
   paneCrossed: bool,
   paneOrigin: vec3f,
+  // Past the last scattering vertex: only the thin panes in the way of its
+  // BSDF ray are still crossed, at their full transmission.
+  pastLastVertex: bool,
 };
 
 struct LightSampleRec {

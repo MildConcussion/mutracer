@@ -50,8 +50,9 @@ bool crossThinPane(SurfaceInteraction si, OpenPbrResolvedMaterial mat, inout Pat
     path.abort = true;
     return false;
   }
-  float passProbability = passWeight / total;
-  if (hashedSample(5u) < passProbability) {
+  // Past the last vertex a mirrored path would only end: pass, at full weight.
+  float passProbability = path.pastLastVertex ? 1.0 : passWeight / total;
+  if (path.pastLastVertex || hashedSample(5u) < passProbability) {
     path.beta *= transmission / passProbability;
     if (!path.paneCrossed) {
       path.paneOrigin = path.ray.o;

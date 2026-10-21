@@ -643,14 +643,24 @@ fn integrateOnePathSample(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray:
   path.paneEvents = 0;
   path.paneCrossed = false;
   path.paneOrigin = ray.o;
+  path.pastLastVertex = false;
 
   let isNotTransparent = (*ma).transmissionWeight < 0.001 && (*ma).subsurfaceWeight < 0.001 && (*ma).alpha > 0.99;
   let bounceLimit = max(rtUniform.bounces, 0);
-  var depth = 0;
   // Transparent paths may take up to three times the configured bounces.
-  for (var idx: i32 = 0; idx < min(bounceLimit * 3, ${MAX_PATH_EVENTS}); idx = idx + 1) {
-    if (isNotTransparent && idx - path.paneEvents > bounceLimit) {
-      path.abort = true;
+  let eventLimit = min(bounceLimit * 3, ${MAX_PATH_EVENTS});
+  var depth = 0;
+  for (var idx: i32 = 0; idx < eventLimit + ${MAX_PATH_EVENTS}; idx = idx + 1) {
+    if (idx >= eventLimit || (isNotTransparent && idx - path.paneEvents > bounceLimit)) {
+      // The last vertex's BSDF ray still crosses the thin panes in its way to
+      // the light behind them, which that vertex's NEE weighed itself against
+      // (its shadow ray crosses them too). Anything else ends the path.
+      if (HAS_THIN_PANE && (*si).hit && (*ma).thinPane) {
+        path.pastLastVertex = true;
+      }
+      else {
+        path.abort = true;
+      }
     }
     if (path.abort) {
       break;
