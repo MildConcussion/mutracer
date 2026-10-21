@@ -96,6 +96,7 @@ fn PrepareDirectLight(
   isSurface: bool,
   candidateIndex: u32,
   candidateCount: u32,
+  room: bool,
   shadowWork: ptr<function, ShadowRayWork>
 ) -> bool {
   (*shadowWork).valid = false;
@@ -104,13 +105,43 @@ fn PrepareDirectLight(
   let lightRnd = vec3f(sample2D(lightDim(candidateIndex, 1u)), sample1D(lightDim(candidateIndex, 0u)));
 
   var lightSample: LightSampleRec;
-  sampleLightForNEECandidate(
-    (*si).position,
-    lightRnd,
-    candidateIndex,
-    candidateCount,
-    &lightSample
-  );
+  if (room) {
+    sampleLightChoiceTable(
+      (*si).position,
+      stratifyLightChoiceRandom(lightRnd, candidateIndex, candidateCount),
+      i32(envPortals.room.x),
+      i32(envPortals.room.y),
+      envPortals.room.z,
+      &lightSample
+    );
+  } else {
+    sampleLightForNEECandidate(
+      (*si).position,
+      lightRnd,
+      candidateIndex,
+      candidateCount,
+      &lightSample
+    );
+  }
+  return PrepareLightSample(si, ma, prepared, path, ffnormal, isSurface, lightSample, shadowWork);
+}
+
+// The shadow-ray work of one drawn light sample: its unshadowed contribution with the NEE MIS weight, and the RIS
+// target. False when it contributes nothing.
+fn PrepareLightSample(
+  si: ptr<function, SurfaceInteraction>,
+  ma: OpenPbrResolvedMaterial,
+  prepared: OpenPbrPreparedBsdf,
+  path: ptr<function, Path>,
+  ffnormal: vec3f,
+  isSurface: bool,
+  drawn: LightSampleRec,
+  shadowWork: ptr<function, ShadowRayWork>
+) -> bool {
+  (*shadowWork).valid = false;
+  (*shadowWork).lightSelectionPmf = 0.0;
+  (*shadowWork).risTarget = 0.0;
+  var lightSample = drawn;
   var Li = lightSample.emission;
 
   let lightDir = lightSample.direction;
@@ -203,8 +234,12 @@ ${hasCoatNormals ? /* wgsl */ `    if (ma.coatNormalEnabled) { normalLight = dot
 
   // A directional source is a delta distribution and cannot be reached by
   // the BSDF-sampling strategy, so its light-sampled contribution has weight 1.
+  var misScatteringPdf = scatteringPdf;
+  if (HAS_ENV_PORTALS && isSurface && portalGuideTotal > 0.0) {
+    misScatteringPdf = envPortalGuidedPdf((*si).position, lightDir, scatteringPdf);
+  }
   let misWeight = select(
-    neeMISWeight(lightPdf, scatteringPdf),
+    neeMISWeight(lightPdf, misScatteringPdf),
     1.0,
     lightSample.isDelta
   );
@@ -214,6 +249,9 @@ ${hasCoatNormals ? /* wgsl */ `    if (ma.coatNormalEnabled) { normalLight = dot
       dot(max(unweightedContribution * lightSelectionPmf, vec3f(0.0)), luminance),
       0.0
     );
+    if (HAS_ENV_PORTALS && lightSample.dist >= INF) {
+      (*shadowWork).risTarget *= envPortalsTargetScale((*si).position, lightDir);
+    }
     (*shadowWork).ray = lightRay;
     (*shadowWork).maxDistance = visibilityDistance;
     (*shadowWork).triangleIndex = (*si).triangleIndex;
@@ -233,6 +271,12 @@ fn DirectLight(
   ffnormal: vec3f,
   isSurface: bool
 ) {
+  // In a room photo's room the sun takes its own shadow ray and the candidates come from the room's light table,
+  // which leaves it out (DirectSunInRoom)
+  let room = HAS_ENV_PORTALS && inEnvPortalRoom((*si).position);
+  if (room) {
+    DirectSunInRoom(si, ma, prepared, path, ffnormal, isSurface);
+  }
   let candidateCount = neeCandidateCount();
   var selected: ShadowRayWork;
   selected.valid = false;
@@ -244,7 +288,7 @@ fn DirectLight(
     var candidate: ShadowRayWork;
     let candidateValid = PrepareDirectLight(
       si, ma, prepared, path, ffnormal, isSurface,
-      candidateIndex, candidateCount, &candidate);
+      candidateIndex, candidateCount, room, &candidate);
     if (candidateCount == 1u) {
       if (!candidateValid) { return; }
       selected = candidate;
@@ -296,8 +340,11 @@ fn emissiveHitMisWeight(
     origin = (*path).paneOrigin;
   }
   let hitDistance = distance((*si).position, origin);
-  let lightPdf = samplingLuminance / rtUniform.lightWeightTotal *
+  var lightPdf = samplingLuminance / rtUniform.lightWeightTotal *
     hitDistance * hitDistance / max(cosLight, 1e-8);
+  if (HAS_ENV_PORTALS && inEnvPortalRoom(origin)) {
+    lightPdf *= envPortals.room.z;
+  }
   return bsdfMISWeight((*path).scatteringPdf, lightPdf);
 }
 
@@ -419,6 +466,9 @@ ${hasAnisotropyDirections ? /* wgsl */ `
 ` : /* wgsl */ ``}
     prepared = openpbr_prepare((*si).tangent, *ma, -(*path).ray.d, ffnormal);
   }
+  if (HAS_ENV_PORTALS) {
+    portalGuideTotal = select(0.0, envPortalGuideTotal((*si).position, *ma), !mediumSampled);
+  }
   DirectLight(si, *ma, prepared, path, ffnormal, !mediumSampled);
   if (mediumSampled) {
     // Pick a new direction based on the phase function.
@@ -442,19 +492,37 @@ ${hasAnisotropyDirections ? /* wgsl */ `
     var sampledMarginalPdf = 0.0;
     let matRnd = vec3f(sample2D(bounceDim(BSDF_DIRECTION)), sample1D(bounceDim(BSDF_LOBE)));
     var fullResponse = vec3f(0.0);
-    let f = openpbr_sample_prepared(
-      prepared,
-      matRnd,
-      &scatterDir,
-      &scatteringPdf,
-      &isNextRefraction,
-      &sampledLobeRoughness,
-      &sampledLobeSpecular,
-      &sampledLobeDiffuse,
-      &sampledLobeIndex,
-      &sampledMarginalPdf,
-      &fullResponse
-    );
+    var f: vec3f;
+    // A guided vertex aims a share of its continuations through the portals (salt "PGui")
+    let guided = HAS_ENV_PORTALS && portalGuideTotal > 0.0;
+    let portalChosen = guided && lightCandidateRandom(0x50477569u) < envPortals.regionMin.w;
+    if (portalChosen) {
+      scatterDir = sampleEnvPortalDirection((*si).position, matRnd.xy, portalGuideTotal);
+      f = openpbr_eval_prepared(prepared, scatterDir, &scatteringPdf);
+      isNextRefraction = false;
+      if (max(max(f.x, f.y), f.z) <= 0.0) {
+        (*path).scatteringPdf = 0.0;
+        (*path).abort = true;
+        return;
+      }
+    } else {
+      f = openpbr_sample_prepared(
+        prepared,
+        matRnd,
+        &scatterDir,
+        &scatteringPdf,
+        &isNextRefraction,
+        &sampledLobeRoughness,
+        &sampledLobeSpecular,
+        &sampledLobeDiffuse,
+        &sampledLobeIndex,
+        &sampledMarginalPdf,
+        &fullResponse
+      );
+    }
+    if (guided && (portalChosen || scatteringPdf > 0.0)) {
+      scatteringPdf = envPortalGuidedPdf((*si).position, scatterDir, scatteringPdf);
+    }
     // A rejected microfacet proposal (including failed refraction), or a
     // material with no scattering lobes, has no continuation. Keep emission
     // and NEE already accumulated at this vertex, but never trace a default
@@ -507,6 +575,44 @@ ${hasCoatNormals ? /* wgsl */ `
         (*si).mediumScattering = vec3f(0.0);
         (*si).mediumAnisotropy = 0.0;
       }
+    }
+  }
+}
+
+
+// A room photo's room: each directional light (the sun) takes its own shadow ray, a delta light needing no MIS, so
+// the light RIS spends no candidate on a sun the room's walls hide; the room's table draws the rest. Where the sun's
+// direction misses every portal the walls almost always hide it: its ray is traced with probability room.w only,
+// and weighed up by as much (roulette, unbiased; sunlight through another room's window and a door still counts).
+fn DirectSunInRoom(
+  si: ptr<function, SurfaceInteraction>,
+  ma: OpenPbrResolvedMaterial,
+  prepared: OpenPbrPreparedBsdf,
+  path: ptr<function, Path>,
+  ffnormal: vec3f,
+  isSurface: bool
+) {
+  for (var i = 0; i < rtUniform.lightsCount; i++) {
+    let light = analyticLights[i];
+    if (i32(light.litType) != DIRECTIONAL_LIGHT) {
+      continue;
+    }
+    var sunSample: LightSampleRec;
+    light_sample_directional(light, &sunSample);
+    var roulette = 1.0;
+    if (!envPortalsPassed((*si).position, sunSample.direction)) {
+      if (lightCandidateRandom(0x53756e00u + u32(i)) >= envPortals.room.w) {
+        continue;
+      }
+      roulette = 1.0 / envPortals.room.w;
+    }
+    sunSample.sourceType = 2u;
+    sunSample.sourceIndex = u32(i);
+    sunSample.selectionPmf = 1.0;
+    var sunWork: ShadowRayWork;
+    if (PrepareLightSample(si, ma, prepared, path, ffnormal, isSurface, sunSample, &sunWork) &&
+        !intersectSceneShadow(sunWork.ray, sunWork.maxDistance, sunWork.triangleIndex)) {
+      (*path).li += sunWork.contribution * roulette * shadowPaneTransmittance;
     }
   }
 }

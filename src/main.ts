@@ -60,6 +60,7 @@ export { default as RectLight } from './scene/RectLight.js';
 export { default as SphereLight } from './scene/SphereLight.js';
 export { default as SpotLight } from './scene/SpotLight.js';
 export { default as EnvironmentLight } from './scene/EnvironmentLight.js';
+export type { EnvironmentPortal, EnvironmentPortals } from './scene/EnvironmentLight.js';
 export {
   default as IESProfile,
   IESParseError,

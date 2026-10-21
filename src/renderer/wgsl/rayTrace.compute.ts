@@ -18,6 +18,7 @@ import { createOpenPbrBsdfWgsl } from './chunks/openPbrBsdf.wgsl.js';
 import samplingWgsl from './chunks/sampling.wgsl.js';
 import sampleShadowCatcherWgsl from './chunks/sampleShadowCatcher.wgsl.js';
 import envMapWgsl from './chunks/envMap.wgsl.js';
+import envPortalsWgsl from './chunks/envPortals.wgsl.js';
 import uvProjectionWgsl from './chunks/uvProjection.wgsl.js';
 export const WORKGROUP_SIZE = 8;
 
@@ -60,6 +61,7 @@ ${createIntersectionWgsl({ hasDisplacement, blasLayoutMask, hasAnisotropyDirecti
 ${randWgsl}
 ${randomWgsl}
 ${envMapWgsl}
+${envPortalsWgsl}
 
 ${samplingWgsl}
 ${createOpenPbrBsdfWgsl(hasAnisotropyDirections, hasCoatNormals)}
@@ -458,6 +460,9 @@ fn bounce(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: p
     let light: Light = analyticLights[i];
     let d = intersectLight(lightRay, light, &lightSample);
     lightSample.pdf *= light.selectionPmf;
+    if (HAS_ENV_PORTALS && inEnvPortalRoom(lightRay.o)) {
+      lightSample.pdf *= envPortals.room.z;
+    }
     let occluded = (*si).hit && d > distance((*si).position, lightRay.o);
     if (d != INF && !(occluded && isAlphaOccluded)) {
       let misWeight = bsdfMISWeight((*path).scatteringPdf, lightSample.pdf);
@@ -480,8 +485,9 @@ fn bounce(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: p
           (*path).ray,
           (*si).wavelength
         );
+        let backgroundUv = cartesianToEquirect((*path).ray.d);
         let backgroundMisWeight = select(bsdfMISWeight((*path).scatteringPdf,
-            envMapPdf(cartesianToEquirect((*path).ray.d)) * rtUniform.envLightPmf),
+            select(envMapPdf(backgroundUv) * rtUniform.envLightPmf, envNeePdfFrom(lightRay.o, (*path).ray.d, backgroundUv), HAS_ENV_PORTALS)),
             1.0, (*path).scatteringIsDelta);
           (*path).li += backgroundMisWeight * (*path).beta * bg.rgb * bg.a;
         (*path).alpha = max((*path).alpha, bg.a);
@@ -492,7 +498,7 @@ fn bounce(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: p
       var emission = textureLinear(envMap, _uv).rgb;
       let misWeight = bsdfMISWeight(
         (*path).scatteringPdf,
-        envMapPdf(_uv) * rtUniform.envLightPmf
+        select(envMapPdf(_uv) * rtUniform.envLightPmf, envNeePdfFrom(lightRay.o, (*path).ray.d, _uv), HAS_ENV_PORTALS)
       );
       if (SPECTRAL) {
         emission = sampling_spectral_rgb_filter(emission, (*si).wavelength);
