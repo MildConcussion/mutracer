@@ -81,8 +81,10 @@ export interface RenderSettings {
   /** Maximum complete samples. Default 2048. */ maxSamples?: number;
   /**
    * Maximum scattering depth, rounded and clamped to [1, 20] (NaN becomes 1).
-   * Total path events, including transmission and alpha skips, are capped at 20
-   * and at three times this depth. Intel Mac WebGL uses min(depth, 3), doubled
+   * Thin panes (window glass) are passed without spending depth. Total path
+   * events, including transmission and alpha skips, are capped at 20 and at
+   * three times this depth; past either limit a path still crosses the thin
+   * panes in its way, to the light behind them. Intel Mac WebGL uses min(depth, 3), doubled
    * for scenes with transmission or alpha, with its existing early termination.
    * Default 3.
    */ bounces?: number;
@@ -196,8 +198,10 @@ export default class Render {
   /** Maximum complete samples. Default 2048. */ maxSamples = 2048;
   /**
    * Maximum scattering depth, rounded and clamped to [1, 20] (NaN becomes 1).
-   * Total path events, including transmission and alpha skips, are capped at 20
-   * and at three times this depth. Intel Mac WebGL uses min(depth, 3), doubled
+   * Thin panes (window glass) are passed without spending depth. Total path
+   * events, including transmission and alpha skips, are capped at 20 and at
+   * three times this depth; past either limit a path still crosses the thin
+   * panes in its way, to the light behind them. Intel Mac WebGL uses min(depth, 3), doubled
    * for scenes with transmission or alpha, with its existing early termination.
    * Default 3.
    */ bounces = 3;

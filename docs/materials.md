@@ -237,8 +237,9 @@ of only by chance. Its response is the smooth thin-wall one: each face
 reflects `specularColor * 2F/(1+F)` and transmits
 `transmissionColor^(1/cos(theta_t)) * (1 - 2F/(1+F))`, where `F` is the
 dielectric Fresnel term at `specularIor`. A closed pane mesh has two faces
-along a ray, so set `transmissionColor` per face. Any other thin-walled
-material keeps the full BSDF and blocks shadow rays.
+along a ray, so set `transmissionColor` per face. Passing a pane does not
+spend one of the `bounces`. Any other thin-walled material keeps the full BSDF
+and blocks shadow rays.
 
 ## Known limitations
 

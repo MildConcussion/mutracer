@@ -50,8 +50,9 @@ fn crossThinPane(
     (*path).abort = true;
     return false;
   }
-  let passProbability = passWeight / total;
-  if (hashedSample(5u) < passProbability) {
+  // Past the last vertex a mirrored path would only end: pass, at full weight.
+  let passProbability = select(passWeight / total, 1.0, (*path).pastLastVertex);
+  if ((*path).pastLastVertex || hashedSample(5u) < passProbability) {
     (*path).beta *= transmission / passProbability;
     if (!(*path).paneCrossed) {
       (*path).paneOrigin = (*path).ray.o;
