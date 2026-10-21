@@ -1435,10 +1435,19 @@ ${hasAnisotropyDirections ? /* wgsl */ `
   }
 }
 
+// What the thin panes the last shadow ray crossed let through (vec3(1) when
+// it crossed none). intersectSceneShadow sets it; a blocked ray leaves it moot.
+var<private> shadowPaneTransmittance: vec3f = vec3f(1.0);
+
 fn intersectSceneShadow(ray: Ray, lightDistance: f32, currTriangleIndex: i32) -> bool {
+  shadowPaneTransmittance = vec3f(1.0);
   if (rtUniform.isEmpty > 0) {
     return false;
   }
+  // Panes already filtered: a triangle split across BVH leaves is reported
+  // once per leaf, and a pane must dim the ray only once.
+  var paneHits: array<vec2i, 4>;
+  var paneHitCount = 0u;
 
   let doubleSided = true;
   let shadowRayTMax = min(max(lightDistance, 0.0), RAY_MAX_DISTANCE);
@@ -1471,6 +1480,32 @@ if (isOccluded) {
       tMax = shadowRayTMax;
       isOccluded = false;
     }
+  }
+}
+if (isOccluded && HAS_THIN_PANE) {
+  let paneData = materialsBuffer[i32(unpackMaterialIndex(bitcast<i32>(insData.z)).x)];
+  if (paneData.thin > 1.5) {
+    // A thin pane filters the ray and lets it go on.
+    let paneKey = vec2i(insIdx, triangleIndex);
+    var seen = false;
+    for (var paneHit = 0u; paneHit < min(paneHitCount, 4u); paneHit++) {
+      seen = seen || all(paneHits[paneHit] == paneKey);
+    }
+    if (!seen) {
+      if (paneHitCount < 4u) {
+        paneHits[paneHitCount] = paneKey;
+      }
+      paneHitCount++;
+      // The world-space angle: an instance may scale unevenly.
+      let paneNormal = transpose(mat3x3<f32>(w2l[0].xyz, w2l[1].xyz, w2l[2].xyz)) * hitNormal;
+      shadowPaneTransmittance *= thinPaneTransmission(
+        thinPaneEta(paneData.ior, paneData.specularWeight),
+        paneData.transmissionColor,
+        dot(normalize(paneNormal), normalize(ray.d))
+      );
+    }
+    tMax = shadowRayTMax;
+    isOccluded = max(max(shadowPaneTransmittance.x, shadowPaneTransmittance.y), shadowPaneTransmittance.z) <= 0.0;
   }
 }
 if (isOccluded) {

@@ -1010,11 +1010,26 @@ ${getBVHTraverseCode(
   }
 }
 
-bool intersectSceneShadow(in Ray ray, float lightDistance, int currTriangleIndex) {
+// What the thin panes the last shadow ray crossed let through (vec3(1) when
+// it crossed none). intersectSceneShadow sets it; a blocked ray leaves it moot.
+vec3 shadowPaneTransmittance = vec3(1.0);
+#ifdef HAS_THIN_PANE
+// Defined with the material sampling (sampleMaterial.glsl).
+float thinPaneEta(float ior, float specularWeight);
+vec3 thinPaneTransmission(float eta, vec3 transmissionColor, float cosTheta);
+#endif
 
+bool intersectSceneShadow(in Ray ray, float lightDistance, int currTriangleIndex) {
+  shadowPaneTransmittance = vec3(1.0);
   if (isEmptyScene) {
     return false;
   }
+#ifdef HAS_THIN_PANE
+  // Panes already filtered: a triangle split across BVH leaves is reported
+  // once per leaf, and a pane must dim the ray only once.
+  ivec2 paneHits[4];
+  int paneHitCount = 0;
+#endif
 
   bool doubleSided = true;
   int maxDim = maxDimension(abs(ray.d));
@@ -1093,6 +1108,41 @@ ${getBVHTraverseCode(
     }
 #endif
   }
+#ifdef HAS_THIN_PANE
+  if (isOccluded) {
+    int paneMaterial = int(unpackMaterialIndex(floatBitsToInt(fetchIns(insIdx * ${INSTANCE_VEC4_STRIDE}).z)).x) * MAT_DATA_SIZE;
+    vec4 paneIor = fetchMatData(paneMaterial + MAT_ROW_IOR_TRANSMISSION);
+    if (paneIor.w > 1.5) {
+      // A thin pane filters the ray and lets it go on.
+      ivec2 paneKey = ivec2(insIdx, triangleIndex);
+      bool seen = false;
+      for (int paneHit = 0; paneHit < 4; paneHit++) {
+        seen = seen || (paneHit < paneHitCount && paneHits[paneHit] == paneKey);
+      }
+      if (!seen) {
+        if (paneHitCount < 4) {
+          paneHits[paneHitCount] = paneKey;
+        }
+        paneHitCount++;
+        // The world-space angle: an instance may scale unevenly.
+        mat3 paneWorldToLocal = mat3(mat4(
+          fetchIns(insIdx * ${INSTANCE_VEC4_STRIDE} + 1),
+          fetchIns(insIdx * ${INSTANCE_VEC4_STRIDE} + 2),
+          fetchIns(insIdx * ${INSTANCE_VEC4_STRIDE} + 3),
+          fetchIns(insIdx * ${INSTANCE_VEC4_STRIDE} + 4)
+        ));
+        vec3 paneNormal = transpose(paneWorldToLocal) * cross(tri.p1 - tri.p0, tri.p2 - tri.p0);
+        shadowPaneTransmittance *= thinPaneTransmission(
+          thinPaneEta(paneIor.x, fetchMatData(paneMaterial + MAT_ROW_BASE_CONTROLS).z),
+          fetchMatData(paneMaterial + MAT_ROW_TRANSMISSION_COLOR).rgb,
+          dot(normalize(paneNormal), normalize(ray.d))
+        );
+      }
+      tMax = min(max(lightDistance, 0.0), RAY_MAX_DISTANCE);
+      isOccluded = max(max(shadowPaneTransmittance.x, shadowPaneTransmittance.y), shadowPaneTransmittance.z) <= 0.0;
+    }
+  }
+#endif
   if (isOccluded) {
     return true;
   }

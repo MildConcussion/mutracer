@@ -149,6 +149,8 @@ ${hasCoatNormals ? /* wgsl */ `
   alphaX: f32,
   alphaY: f32,
   thinWalled: bool,
+  // A thin pane (MaterialTable isThinPane): passed or mirrored, never shaded.
+  thinPane: bool,
 };
 
 struct Path {
@@ -161,6 +163,12 @@ struct Path {
   scatteringPdf: f32,
   scatteringIsDelta: bool,
   isNextRefraction: bool,
+  // Thin panes passed straight through; they do not spend the bounce budget.
+  paneEvents: i32,
+  // Since the last scattering vertex the path passed a thin pane; paneOrigin
+  // is that vertex's ray origin, for MIS of the light reached behind it.
+  paneCrossed: bool,
+  paneOrigin: vec3f,
 };
 
 struct LightSampleRec {

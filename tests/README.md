@@ -31,6 +31,13 @@ be run against each example's scene and camera. HDR equivalence requires a
 separate fixed-resolution, fixed-spp `render.converge` / `render.readPixels('hdr')`
 comparison against pixels captured before a refactor.
 
+[`gpu/thinPane.html`](./gpu/thinPane.html) checks window glass (thin panes) in a
+black room on both backends (`?webgl` for WebGL 2) and reports `pass`: sun on
+the floor through the pane against the open window times the pane's
+transmittance at the sun's angle, a panel seen through it against the
+transmittance at normal incidence, and a floor lit by an emissive panel through
+it against the same glass rendered with the full BSDF (roughness 1e-4).
+
 Use small generated fixtures; do not commit models or images for tests.
 
 [`gpu/shaderSource.html`](./gpu/shaderSource.html) exposes

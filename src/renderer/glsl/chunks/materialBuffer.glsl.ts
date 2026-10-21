@@ -159,6 +159,11 @@ void getMaterial(
   mat.mediumType = 0;
 #endif
   mat.thinWalled = iorAndTransmission.w > 0.5;
+#ifdef HAS_THIN_PANE
+  mat.thinPane = iorAndTransmission.w > 1.5;
+#else
+  mat.thinPane = false;
+#endif
   mat.bevel = misc.r;
   mat.transmissionDispersionScale = misc.g;
   mat.dispersionAbbeNumber = max(filmAndDispersion.y, 1e-6);

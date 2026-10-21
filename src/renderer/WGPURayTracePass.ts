@@ -29,6 +29,7 @@ import RectLight from '../scene/RectLight.js';
 import SpotLight from '../scene/SpotLight.js';
 import MaterialTable, {
   DEFAULT_MAX_TEXTURE_ARRAY_BYTES,
+  isThinPane,
   materialUsesMedium
 } from './MaterialTable.js';
 import { SceneBackground, SceneLight } from '../scene/Scene.js';
@@ -2378,6 +2379,7 @@ ${rayTraceCompute({
         m.coatAnisotropy > 0 && m.coatAnisotropyRotation !== 0),
       HAS_MEDIUM,
       HAS_SHADOW_CATCHER: this._hasShadowCatcher,
+      HAS_THIN_PANE: materials.some(isThinPane),
       HAS_THIN_FILM: materials.some((material) => material.thinFilmWeight > 0),
       HAS_COAT: materials.some((material) => material.coatWeight > 0),
       HAS_FUZZ: materials.some((material) => material.fuzzWeight > 0),

@@ -148,6 +148,7 @@ fn getMaterial(
   (*ma).specularIor = matData.ior;
   (*ma).transmissionWeight = matData.transmission;
   (*ma).thinWalled = matData.thin > 0.5;
+  (*ma).thinPane = HAS_THIN_PANE && matData.thin > 1.5;
   (*ma).bevel = matData.bevel;
   (*ma).transmissionDispersionScale = matData.dispersion;
   (*ma).dispersionAbbeNumber = max(matData.dispersionAbbeNumber, 1e-6);

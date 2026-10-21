@@ -46,7 +46,7 @@ const bounceCodeOnOther = glsl`
 bool isOpaque = !si.isTransparency;
 int activeBounceLimit = min(BOUNCES, bounceLimit);
 for(int idx = 0; idx < min(BOUNCES * 3, ${MAX_PATH_EVENTS}); idx++) {
-  if (isOpaque && idx > activeBounceLimit) {
+  if (isOpaque && idx - path.paneEvents > activeBounceLimit) {
     path.abort = true;
   }
   if (path.abort) {
@@ -205,6 +205,9 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
   }
 
   bool sampleIgnored = false;
+  // A thin pane passed straight through is no scattering vertex: the bounce,
+  // the BSDF pdf and Russian roulette wait for the surface behind it.
+  bool panePassed = false;
   if ((mat.materialType == STANDARD || mat.materialType == UNLIT)) {
     if (transmissiveOutputAlphaMin < 1.0) {
       // TODO increase the alpha when there are more bounces.
@@ -220,6 +223,15 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
         sampleIgnored = true;
       }
     }
+#ifdef HAS_THIN_PANE
+    if (!sampleIgnored && mat.thinPane) {
+      panePassed = crossThinPane(si, mat, path);
+      // A camera ray through the pane goes on as through a cut-out: what it
+      // meets behind is shaded as seen directly, the background shown.
+      sampleIgnored = panePassed && path.fromEye;
+    }
+    else
+#endif
     if (!sampleIgnored) {
       SampleMaterial(si, mat, path);
     }
@@ -250,7 +262,7 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
 
   // Russian Roulette sampling
 #ifdef USE_RR
-  if (depth >= RR_MAX && !sampleIgnored) {
+  if (depth >= RR_MAX && !sampleIgnored && !panePassed) {
     // Max-component survival (pbrt-v4) avoids over-amplifying saturated paths.
     float maxComponent = max(max(path.beta.x, path.beta.y), path.beta.z);
     float q = max(0.0, 1.0 - maxComponent);
@@ -298,11 +310,16 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
 #ifdef NUM_LIGHTS
   // Use light if hit the light
   LightSampleRec lightSample;
+  // Behind a thin pane, a light is reached from the vertex before the pane.
+  Ray lightRay = path.ray;
+  if (path.paneCrossed) {
+    lightRay.o = path.paneOrigin;
+  }
   for (int i = 0; i < NUM_LIGHTS; i++) {
     // Fetch light Data
     Light light = fetchLight(i);
-    float d = intersectLight(path.ray, light, lightSample);
-    bool occluded = si.hit && d > distance(si.position, path.ray.o);
+    float d = intersectLight(lightRay, light, lightSample);
+    bool occluded = si.hit && d > distance(si.position, lightRay.o);
     if (d != INF && !(occluded && isAlphaOccluded)) {
       lightSample.pdf *= light.selectionPmf;
       float misWeight = sampling_power_heuristic(path.scatteringPdf, lightSample.pdf);
@@ -348,7 +365,9 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
   }
 #endif
 
-  depth++;
+  if (!panePassed) {
+    depth++;
+  }
 }
 
 
@@ -465,6 +484,9 @@ vec4 integrateOnePathSample(SurfaceInteraction si, Ray ray, OpenPbrResolvedMater
   path.scatteringIsDelta = false;
   path.isNextRefraction = false;
   path.abort = false;
+  path.paneEvents = 0;
+  path.paneCrossed = false;
+  path.paneOrigin = ray.o;
   int depth = 0;
 ${intelMac ? bounceCodeOnIntelMac : bounceCodeOnOther}
   return vec4(path.li, path.alpha);
@@ -554,7 +576,8 @@ vec4 integrator(Ray ray, out RayTraceAuxiliary outAux) {
       : si.normal;
     // A refracted/reflected continuation is stochastic and therefore not a
     // clean OIDN feature. Keep the stable primary glass guide instead.
-    si.albedoSampled = mat.transmissionWeight > 0.5;
+    // A thin pane is seen through: the surface behind it guides instead.
+    si.albedoSampled = mat.transmissionWeight > 0.5 && !mat.thinPane;
   }
 
   if (mat.transmissionDispersionScale > 0.001) {

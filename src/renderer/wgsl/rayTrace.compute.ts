@@ -345,6 +345,9 @@ fn bounce(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: p
   }
 
   var sampleIgnored = false;
+  // A thin pane passed straight through is no scattering vertex: the bounce,
+  // the BSDF pdf and Russian roulette wait for the surface behind it.
+  var panePassed = false;
   if ((matType == STANDARD || matType == UNLIT)) {
     let alpha = clamp((*ma).alpha, 0.0, 1.0);
     
@@ -361,7 +364,13 @@ fn bounce(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: p
       let outputAlpha = max(1.0 - (*ma).transmissionWeight, 1.0 - pow(1.0 - rtUniform.transmissiveOutputAlphaMin, f32(*depth)));
       (*path).alpha = max(outputAlpha, (*path).alpha);
     }
-    if (!sampleIgnored) {
+    if (HAS_THIN_PANE && !sampleIgnored && (*ma).thinPane) {
+      panePassed = crossThinPane(si, ma, path);
+      // A camera ray through the pane goes on as through a cut-out: what it
+      // meets behind is shaded as seen directly, the background shown.
+      sampleIgnored = panePassed && (*path).fromEye;
+    }
+    else if (!sampleIgnored) {
       bounceIndex = u32(max(*depth, 0));
       SampleMaterial(si, ma, path);
     }
@@ -397,7 +406,7 @@ fn bounce(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: p
 
   // Russian roulette with throughput compensation.
   if (USE_RR) {
-    if (*depth >= RR_MAX && !sampleIgnored) {
+    if (*depth >= RR_MAX && !sampleIgnored && !panePassed) {
       let rouletteBeta = (*path).beta;
       // Max-component survival (pbrt-v4) avoids over-amplifying saturated paths.
       let maxComponent = max(max(rouletteBeta.x, rouletteBeta.y), rouletteBeta.z);
@@ -439,12 +448,17 @@ fn bounce(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: p
   // Use light if hit the light
   var lightSample: LightSampleRec;
   let isAlphaOccluded = hashedSample(3u) < (*ma).alpha;
+  // Behind a thin pane, a light is reached from the vertex before the pane.
+  var lightRay = (*path).ray;
+  if (HAS_THIN_PANE && (*path).paneCrossed) {
+    lightRay.o = (*path).paneOrigin;
+  }
   for (var i = 0; i < rtUniform.lightsCount; i++) {
     // Fetch light Data
     let light: Light = analyticLights[i];
-    let d = intersectLight((*path).ray, light, &lightSample);
+    let d = intersectLight(lightRay, light, &lightSample);
     lightSample.pdf *= light.selectionPmf;
-    let occluded = (*si).hit && d > distance((*si).position, (*path).ray.o);
+    let occluded = (*si).hit && d > distance((*si).position, lightRay.o);
     if (d != INF && !(occluded && isAlphaOccluded)) {
       let misWeight = bsdfMISWeight((*path).scatteringPdf, lightSample.pdf);
       if (SPECTRAL) {
@@ -492,7 +506,9 @@ fn bounce(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: p
     }
   }
 
-  *depth = *depth + 1;
+  if (!panePassed) {
+    *depth = *depth + 1;
+  }
 }
 
 fn initCameraRay(coord: vec2f) -> Ray {
@@ -618,13 +634,16 @@ fn integrateOnePathSample(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray:
   path.scatteringIsDelta = false;
   path.isNextRefraction = false;
   path.abort = false;
+  path.paneEvents = 0;
+  path.paneCrossed = false;
+  path.paneOrigin = ray.o;
 
   let isNotTransparent = (*ma).transmissionWeight < 0.001 && (*ma).subsurfaceWeight < 0.001 && (*ma).alpha > 0.99;
   let bounceLimit = max(rtUniform.bounces, 0);
   var depth = 0;
   // Transparent paths may take up to three times the configured bounces.
   for (var idx: i32 = 0; idx < min(bounceLimit * 3, ${MAX_PATH_EVENTS}); idx = idx + 1) {
-    if (isNotTransparent && idx > bounceLimit) {
+    if (isNotTransparent && idx - path.paneEvents > bounceLimit) {
       path.abort = true;
     }
     if (path.abort) {
@@ -747,7 +766,8 @@ fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> 
 
       // Do not replace a glass guide with a randomly selected downstream
       // refraction/reflection hit; OIDN auxiliary features must stay clean.
-      si.albedoSampled = ma.transmissionWeight > 0.5;
+      // A thin pane is seen through: the surface behind it guides instead.
+      si.albedoSampled = ma.transmissionWeight > 0.5 && !(HAS_THIN_PANE && ma.thinPane);
     }
 
     (*outAux).isShadowCatcher = false;

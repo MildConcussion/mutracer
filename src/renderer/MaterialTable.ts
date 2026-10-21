@@ -47,6 +47,30 @@ export interface TextureAtlasStats {
   width: number;
 }
 
+/**
+ * A thin pane: a smooth, untextured, thin-walled dielectric that transmits
+ * everything its Fresnel reflection leaves (window glass). Its thin-wall
+ * transmission is a straight-through delta lobe, so the tracers treat it as a
+ * filter rather than a scattering vertex: paths pass it or mirror off it, and
+ * shadow rays cross it attenuated (`thin` is packed as 2). Any other
+ * thin-walled material keeps the OpenPBR BSDF and stays opaque to shadow rays.
+ */
+export function isThinPane(material: OpenPBRMaterial): boolean {
+  return material.thinWalled &&
+    !material.unlit && !material.shadowCatcher &&
+    material.transmissionWeight >= 1 &&
+    material.specularRoughness === 0 &&
+    material.baseMetalness === 0 &&
+    material.coatWeight === 0 &&
+    material.fuzzWeight === 0 &&
+    material.thinFilmWeight === 0 &&
+    material.subsurfaceWeight === 0 &&
+    material.transmissionDispersionScale === 0 &&
+    resolveMaterialAlphaMode(material) === 'opaque' &&
+    materialEmission(material).every((channel) => channel === 0) &&
+    MATERIAL_TEXTURE_NAMES.every((name) => !material[name]);
+}
+
 export function materialUsesMedium(material: OpenPBRMaterial): boolean {
   return !material.thinWalled && (
     (material.transmissionWeight > 0 && material.transmissionDepth > 0) ||
@@ -709,7 +733,8 @@ class MaterialTable {
       metallic: materials.map((m) => m.baseMetalness),
       ior: materials.map((m) => m.specularIor),
       dispersion: materials.map((m) => m.transmissionDispersionScale),
-      thin: materials.map((m) => +m.thinWalled),
+      // 0 solid, 1 thin-walled, 2 thin pane (isThinPane); readers test > 0.5
+      thin: materials.map((m) => isThinPane(m) ? 2 : +m.thinWalled),
       bevelSize: materials.map((m) => m.bevelSize),
       transmission: materials.map((m) => m.transmissionWeight),
       anisotropy: materials.map(m => m.specularAnisotropyModel === 'gltf' ? finiteAnisotropySource(m.specularAnisotropy, 0) : m.specularAnisotropy),

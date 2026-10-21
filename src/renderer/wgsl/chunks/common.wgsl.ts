@@ -8,6 +8,9 @@ const EPS = 0.0005;
 const INV4PI = 0.07957747154594766;
 const INF = 1.0e+38;
 const ROUGHNESS_MIN = 0.001;
+// The BSDF pdf a path carries after mirroring off a thin pane: a delta event,
+// so a light it then reaches takes the full MIS weight.
+const THIN_PANE_DELTA_PDF = 1e30;
 
 // Ray Tracing Gems, Wachter/Binder: move along the geometric normal by
 // representable floats rather than stepping along the ray across a corner.

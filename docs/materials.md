@@ -226,6 +226,20 @@ Choose the height for your model's local dimensions. The library does not infer
 physical units or resize the model. Changing displacement settings can trigger
 an expensive [full mesh update](updates.md#full-mesh-updates).
 
+## Window glass
+
+A smooth, untextured, thin-walled dielectric that transmits fully
+(`thinWalled: true`, `transmissionWeight: 1`, `specularRoughness: 0`,
+`baseMetalness: 0`, without coat, fuzz, thin film, subsurface, dispersion,
+emission or alpha) is a thin pane. Lights and the environment are sampled
+through it, so sun and sky reach a room through its windows directly instead
+of only by chance. Its response is the smooth thin-wall one: each face
+reflects `specularColor * 2F/(1+F)` and transmits
+`transmissionColor^(1/cos(theta_t)) * (1 - 2F/(1+F))`, where `F` is the
+dielectric Fresnel term at `specularIor`. A closed pane mesh has two faces
+along a ray, so set `transmissionColor` per face. Any other thin-walled
+material keeps the full BSDF and blocks shadow rays.
+
 ## Known limitations
 
 Data-backed material atlases require RGBA8 `Uint8Array` sources. WebGL 2 can
