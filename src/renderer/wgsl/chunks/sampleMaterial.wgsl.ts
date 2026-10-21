@@ -495,7 +495,7 @@ ${hasAnisotropyDirections ? /* wgsl */ `
     var f: vec3f;
     // A guided vertex aims a share of its continuations through the portals (salt "PGui")
     let guided = HAS_ENV_PORTALS && portalGuideTotal > 0.0;
-    let portalChosen = guided && lightCandidateRandom(0x50477569u) < envPortals.regionMin.w;
+    let portalChosen = guided && lightCandidateRandom(0x50477569u) < envPortals.regionCorner.w;
     if (portalChosen) {
       scatterDir = sampleEnvPortalDirection((*si).position, matRnd.xy, portalGuideTotal);
       f = openpbr_eval_prepared(prepared, scatterDir, &scatteringPdf);

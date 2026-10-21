@@ -24,8 +24,15 @@ export interface EnvironmentPortal {
 export interface EnvironmentPortals {
   /** At most 16 rectangles; more are ignored. No default. */
   rectangles: EnvironmentPortal[];
-  /** World-space box of the interior the rectangles light; no default. */
-  region: { min: [number, number, number]; max: [number, number, number] };
+  /**
+   * World-space box of the interior the rectangles light: `corner` plus the three edges from it, so a room of a
+   * rotated building keeps its own box and the terrace outside stays out. Any parallelepiped works; edges that span
+   * no volume switch the portals off. No default.
+   */
+  region: {
+    corner: [number, number, number];
+    edges: [[number, number, number], [number, number, number], [number, number, number]];
+  };
 }
 
 /**

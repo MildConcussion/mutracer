@@ -14,17 +14,22 @@
 /** Rectangles one environment light takes; the uniform holds this many. */
 export const MAX_ENV_PORTALS = 16;
 
-/** Bytes of the EnvPortals uniform: four header vec4s, then three vec4s per rectangle. */
-export const ENV_PORTALS_UNIFORM_BYTES = (4 + 3 * MAX_ENV_PORTALS) * 16;
+/** Bytes of the EnvPortals uniform: six header vec4s, then three vec4s per rectangle. */
+export const ENV_PORTALS_UNIFORM_BYTES = (6 + 3 * MAX_ENV_PORTALS) * 16;
 
 export default /* wgsl */ `
 struct EnvPortals {
   // x: rectangle count, y: share of environment samples drawn through the rectangles, z: RIS target scale of a
   // distant light whose direction misses every rectangle, w: 1 when a point in the region is a room's (DirectSunInRoom)
   info: vec4f,
-  // w: share of a guided room surface's continuations aimed through the rectangles
-  regionMin: vec4f,
-  regionMax: vec4f,
+  // The region, a box in any orientation: xyz its corner, w the share of a guided room surface's continuations aimed
+  // through the rectangles
+  regionCorner: vec4f,
+  // The rows of the inverse of the region's edge matrix: a point's box coordinates, each in [0, 1] inside, are their
+  // dots with the point less the corner
+  regionAxisU: vec4f,
+  regionAxisV: vec4f,
+  regionAxisW: vec4f,
   // The room's light table (the scene's without directional lights): x its texel offset from the main table's, y its
   // choice count, z its pmf scale (1 / (1 - the directional lights' pmf)), w the chance a sun ray missing every portal
   // is traced
@@ -39,7 +44,12 @@ struct EnvPortals {
 var<private> portalGuideTotal: f32 = 0.0;
 
 fn inEnvPortalRegion(p: vec3f) -> bool {
-  return HAS_ENV_PORTALS && all(p >= envPortals.regionMin.xyz) && all(p <= envPortals.regionMax.xyz);
+  if (!HAS_ENV_PORTALS) {
+    return false;
+  }
+  let d = p - envPortals.regionCorner.xyz;
+  let local = vec3f(dot(envPortals.regionAxisU.xyz, d), dot(envPortals.regionAxisV.xyz, d), dot(envPortals.regionAxisW.xyz, d));
+  return all(local >= vec3f(0.0)) && all(local <= vec3f(1.0));
 }
 
 fn inEnvPortalRoom(p: vec3f) -> bool {
@@ -206,10 +216,10 @@ fn envNeePdfFrom(p: vec3f, dir: vec3f, uv: vec2f) -> f32 {
   return envLightPdfFrom(p, dir, uv) * rtUniform.envLightPmf * select(1.0, envPortals.room.z, inEnvPortalRoom(p));
 }
 
-// The rectangles' total weight at p when a surface of this material there guides a share (regionMin.w) of its
+// The rectangles' total weight at p when a surface of this material there guides a share (regionCorner.w) of its
 // continuations through them: rough, opaque, single-layer surfaces in a room (other lobes keep their own sampling).
 fn envPortalGuideTotal(p: vec3f, ma: OpenPbrResolvedMaterial) -> f32 {
-  if (!inEnvPortalRoom(p) || envPortals.regionMin.w <= 0.0 || ma.transmissionWeight > 0.0 || ma.subsurfaceWeight > 0.0 ||
+  if (!inEnvPortalRoom(p) || envPortals.regionCorner.w <= 0.0 || ma.transmissionWeight > 0.0 || ma.subsurfaceWeight > 0.0 ||
       ma.coatWeight > 0.0 || ma.thinWalled || ma.specularRoughness < 0.3) {
     return 0.0;
   }
@@ -218,7 +228,7 @@ fn envPortalGuideTotal(p: vec3f, ma: OpenPbrResolvedMaterial) -> f32 {
 
 // A guided vertex's scattering pdf for dir: the share through the rectangles mixed with the BSDF's own pdf.
 fn envPortalGuidedPdf(p: vec3f, dir: vec3f, bsdfPdf: f32) -> f32 {
-  let share = envPortals.regionMin.w;
+  let share = envPortals.regionCorner.w;
   return share * envPortalsPdf(p, dir, portalGuideTotal) + (1.0 - share) * bsdfPdf;
 }
 `;
