@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import MaterialTable, {
-
-
+  isThinPane
 } from '../../src/renderer/MaterialTable';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import Texture from '../../src/scene/Texture';
@@ -249,6 +248,29 @@ describe('MaterialTable texture arrays', () => {
 
     expect(materialData.bufferData.doubleSided).toEqual([1]);
     expect(packed[23 * 4 + 2]).toBe(1);
+  });
+
+  it('packs smooth untextured thin-walled glass as a thin pane and nothing else', () => {
+    stubCanvas();
+    const pane = () => {
+      const material = new OpenPBRMaterial();
+      Object.assign(material, {thinWalled: true, transmissionWeight: 1, specularRoughness: 0});
+      return material;
+    };
+    const solidGlass = Object.assign(pane(), {thinWalled: false});
+    const roughPane = Object.assign(pane(), {specularRoughness: 0.05});
+    const leaf = Object.assign(new OpenPBRMaterial(), {thinWalled: true, subsurfaceWeight: 0.4});
+    const filmPane = Object.assign(pane(), {thinFilmWeight: 1});
+    const tintedPane = Object.assign(pane(), {
+      transmissionMap: new Texture({ width: 4, height: 4 } as HTMLImageElement)
+    });
+    const materials = [pane(), solidGlass, roughPane, leaf, filmPane, tintedPane];
+
+    expect(materials.map(isThinPane)).toEqual([true, false, false, false, false, false]);
+    const materialData = new MaterialTable(materials, []);
+    expect(materialData.bufferData.thin).toEqual([2, 0, 1, 1, 1, 1]);
+    // IOR_TRANSMISSION row (4): thin in w, read as thin-walled above 0.5
+    expect(materialData.getBufferArray()[4 * 4 + 3]).toBe(2);
   });
 
   it('derives OpenPBR volume coefficients from color, depth and albedo', () => {

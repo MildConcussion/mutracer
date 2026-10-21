@@ -43,6 +43,7 @@ import createRayTraceFragmentShader from './glsl/rayTrace.frag.js';
 import shadowCatcherFrag from './glsl/shadowCatcher.frag.js';
 import MaterialTable, {
   DEFAULT_MAX_TEXTURE_ARRAY_BYTES,
+  isThinPane,
   materialUsesMedium
 } from './MaterialTable.js';
 import OpenPBRMaterial, {
@@ -668,6 +669,7 @@ class WebGLRayTracePass {
         HAS_BEVEL,
         HAS_MEDIUM,
         HAS_ALPHA: this._hasAlpha,
+        HAS_THIN_PANE: materials.some(isThinPane),
 
         BEVEL_SAMPLES: this._bevelSamples,
 

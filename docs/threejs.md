@@ -172,7 +172,7 @@ Renderer-specific settings without a Three.js equivalent:
 | Key | On | Description |
 | --- | --- | --- |
 | `mutracerShadowCatcher: true` | material | Shadow-catcher ground |
-| `mutracerOpenPBR: { ... }` | material | OpenPBR inputs without a Three.js equivalent: `baseWeight`, `baseDiffuseRoughness`, `specularWeight`, `specularColor`, `coat*`, `fuzz*`, `thinFilm*`, `thinWalled`, `subsurface*`, `transmissionScatter*`, `transmissionDispersion*` |
+| `mutracerOpenPBR: { ... }` | material | OpenPBR inputs without a Three.js equivalent: `baseWeight`, `baseDiffuseRoughness`, `specularWeight`, `specularColor`, `coat*`, `fuzz*`, `thinFilm*`, `thinWalled`, `subsurface*`, `transmissionScatter*`, `transmissionDispersion*`. Also the base inputs `transmissionWeight`, `transmissionColor`, `specularRoughness`, `baseMetalness` and `specularIor`, which replace the converted values: the path-traced version of a real-time stand-in, such as a glossy `MeshStandardMaterial` that renders as [window glass](./materials.md#window-glass) while the live view keeps it as it is |
 | `mutracerBevelSize` | material | Shader bevel radius |
 | `mutracerUvProjection`, `mutracerUvProjectionScale`, `mutracerUvReferenceLength` | material | Procedural UV projection |
 | `mutracerDisplacement*` | material | Displacement settings, same names as the `OpenPBRMaterial` fields; projection scale is `mutracerDisplacementUvProjectionScale` |

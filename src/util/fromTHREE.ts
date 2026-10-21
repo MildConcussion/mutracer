@@ -484,6 +484,32 @@ function convertMaterial(
       1,
       2.5
     );
+    // Base inputs Three.js does have, for the path-traced version of a
+    // real-time stand-in: a MeshStandardMaterial the live view keeps as it is
+    // (a MeshPhysicalMaterial would add Three.js's transmission pass) traces
+    // as, say, thin window glass.
+    material.transmissionWeight = finite(
+      openPbr.transmissionWeight,
+      material.transmissionWeight
+    );
+    material.transmissionColor = color(
+      openPbr.transmissionColor,
+      material.transmissionColor
+    );
+    material.specularRoughness = finite(
+      openPbr.specularRoughness,
+      material.specularRoughness
+    );
+    material.baseMetalness = finite(
+      openPbr.baseMetalness,
+      material.baseMetalness
+    );
+    material.specularIor = finite(
+      openPbr.specularIor,
+      material.specularIor,
+      1,
+      Infinity
+    );
   }
   material.geometryOpacity = standardMaterial.opacity;
   // THREE.DoubleSide is the numeric enum value 2. Keep this module's Three.js
@@ -728,7 +754,9 @@ function retainLight(store: ConversionStore, source: THREE.Object3D | THREE.Text
  * Renderer-specific material settings can be supplied through
  * `material.userData`, e.g. `userData.mutracerShadowCatcher = true` or
  * `userData.mutracerOpenPBR = { ... }` for OpenPBR inputs without a Three.js
- * equivalent.
+ * equivalent, and for the base inputs (`transmissionWeight`,
+ * `transmissionColor`, `specularRoughness`, `baseMetalness`, `specularIor`)
+ * of the path-traced version of a real-time stand-in.
  */
 export function fromTHREEScene(
   scene: THREE.Scene,

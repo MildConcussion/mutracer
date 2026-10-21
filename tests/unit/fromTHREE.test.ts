@@ -2,6 +2,7 @@ import Engine from '../../src/Engine';
 import { getLightDirection } from '../../src/renderer/lightsUtil';
 import { getRectLightUOrV, getRectLightArea } from '../../src/renderer/lightsUtil.js';
 import { setGeometryBvh, getGeometryBvh } from '../../src/renderer/geometryBvh.js';
+import { isThinPane } from '../../src/renderer/MaterialTable';
 import * as THREE from 'three';
 import { describe, expect, it, vi } from 'vitest';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
@@ -596,6 +597,48 @@ describe('Three.js scene conversion', () => {
       thinFilmWeight: 1,
       thinFilmThickness: 0.45,
       thinFilmIor: 1.4
+    });
+  });
+
+  it('traces a real-time stand-in with the base inputs its OpenPBR metadata names', () => {
+    // Window glass: the live view keeps its dark glossy standard material.
+    const material = new THREE.MeshStandardMaterial({ color: 0x6f8796, roughness: 0.05, metalness: 0.85 });
+    material.userData.mutracerOpenPBR = {
+      thinWalled: true,
+      transmissionWeight: 1,
+      transmissionColor: [0.92, 0.93, 0.91],
+      specularRoughness: 0,
+      baseMetalness: 0,
+      specularIor: 1.52
+    };
+    const scene = new THREE.Scene();
+    scene.add(new THREE.Mesh(new THREE.BoxGeometry(), material));
+
+    const converted = fromTHREEScene(scene).meshes[0].materials[0];
+
+    expect(converted).toMatchObject({
+      thinWalled: true,
+      transmissionWeight: 1,
+      transmissionColor: [0.92, 0.93, 0.91],
+      specularRoughness: 0,
+      baseMetalness: 0,
+      specularIor: 1.52
+    });
+    expect(isThinPane(converted)).toBe(true);
+    expect(material).toMatchObject({ roughness: 0.05, metalness: 0.85, type: 'MeshStandardMaterial' });
+
+    material.userData.mutracerOpenPBR = {
+      transmissionWeight: 2,
+      transmissionColor: [Number.NaN, 1.5, 0.5],
+      specularRoughness: -1,
+      specularIor: 0.5
+    };
+    expect(fromTHREEScene(scene).meshes[0].materials[0]).toMatchObject({
+      transmissionWeight: 1,
+      transmissionColor: [1, 1, 0.5],
+      specularRoughness: 0,
+      baseMetalness: 0.85,
+      specularIor: 1
     });
   });
 

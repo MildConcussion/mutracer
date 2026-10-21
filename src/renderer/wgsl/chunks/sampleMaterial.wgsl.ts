@@ -4,6 +4,77 @@
 export function createSampleMaterialWgsl(hasAnisotropyDirections = true, hasCoatNormals = false) {
   return /* wgsl */ `
 
+// A thin pane (MaterialTable isThinPane) as its smooth thin-wall OpenPBR lobes
+// give it: a mirror of reflectance specularColor * Rw and a straight-through
+// transmission transmissionColor^(1 / cos(theta_t)) * (1 - Rw), where
+// Rw = 2F / (1 + F) is the window reflectance of one interface's Fresnel F.
+fn thinPaneEta(ior: f32, specularWeight: f32) -> f32 {
+  return openpbr_apply_specular_weight_to_ior(ior, max(specularWeight, 0.0));
+}
+
+fn thinPaneReflectance(eta: f32, cosTheta: f32) -> f32 {
+  let fresnel = openpbr_dielectric_fresnel(clamp(abs(cosTheta), 0.0, 1.0), 1.0 / eta);
+  return 2.0 * fresnel / (1.0 + fresnel);
+}
+
+fn thinPaneTransmission(eta: f32, transmissionColor: vec3f, cosTheta: f32) -> vec3f {
+  let cosine = clamp(abs(cosTheta), 0.0, 1.0);
+  let transmittedSineSquared = (1.0 - cosine * cosine) / max(eta * eta, 1e-9);
+  if (transmittedSineSquared >= 1.0) {
+    return vec3f(0.0);
+  }
+  let tint = pow(
+    max(transmissionColor, vec3f(0.0)),
+    vec3f(1.0 / max(sqrt(1.0 - transmittedSineSquared), 1e-5))
+  );
+  return tint * (1.0 - thinPaneReflectance(eta, cosine));
+}
+
+// A path meets a thin pane: it passes straight through (true) or mirrors off
+// it (false), chosen by the luminance of the two responses. Passing is no
+// scattering event: the ray keeps its direction, BSDF pdf and bounce, and the
+// last vertex is kept for the MIS of a light reached behind the pane.
+fn crossThinPane(
+  si: ptr<function, SurfaceInteraction>,
+  ma: ptr<function, OpenPbrResolvedMaterial>,
+  path: ptr<function, Path>
+) -> bool {
+  let incident = (*path).ray.d;
+  let cosTheta = dot((*si).faceNormal, incident);
+  let eta = thinPaneEta((*ma).specularIor, (*ma).specularWeight);
+  let transmission = thinPaneTransmission(eta, (*ma).transmissionColor, cosTheta);
+  let reflection = (*ma).specularColor * thinPaneReflectance(eta, cosTheta);
+  let passWeight = dot(transmission, luminance);
+  let total = passWeight + dot(reflection, luminance);
+  if (!(total > 0.0)) {
+    (*path).abort = true;
+    return false;
+  }
+  let passProbability = passWeight / total;
+  if (hashedSample(5u) < passProbability) {
+    (*path).beta *= transmission / passProbability;
+    if (!(*path).paneCrossed) {
+      (*path).paneOrigin = (*path).ray.o;
+      (*path).paneCrossed = true;
+    }
+    (*path).paneEvents += 1;
+    (*path).ray.o = (*si).position + incident * EPS;
+    return true;
+  }
+  // A smooth mirror: a delta event no light sample can reach, so whatever its
+  // reflection meets gets the full MIS weight.
+  let facing = select((*si).faceNormal, -(*si).faceNormal, cosTheta > 0.0);
+  (*path).beta *= reflection / (1.0 - passProbability);
+  (*path).ray.d = reflect(incident, facing);
+  (*path).ray.o = (*si).position + facing * EPS;
+  (*path).scatteringPdf = THIN_PANE_DELTA_PDF;
+  (*path).scatteringIsDelta = false;
+  (*path).isNextRefraction = false;
+  (*path).fromEye = false;
+  (*path).paneCrossed = false;
+  return false;
+}
+
 struct ShadowRayWork {
   ray: Ray,
   maxDistance: f32,
@@ -199,7 +270,8 @@ fn DirectLight(
   }
   if (selected.valid &&
       !intersectSceneShadow(selected.ray, selected.maxDistance, selected.triangleIndex)) {
-    (*path).li += selected.contribution * candidateUCW;
+    // Thin panes the shadow ray crossed filter the light (1 without panes).
+    (*path).li += selected.contribution * candidateUCW * shadowPaneTransmittance;
   }
 }
 
@@ -219,7 +291,11 @@ fn emissiveHitMisWeight(
   if (samplingLuminance <= 0.0 || cosLight <= 0.0) {
     return 1.0;
   }
-  let hitDistance = distance((*si).position, (*path).ray.o);
+  var origin = (*path).ray.o;
+  if (HAS_THIN_PANE && (*path).paneCrossed) {
+    origin = (*path).paneOrigin;
+  }
+  let hitDistance = distance((*si).position, origin);
   let lightPdf = samplingLuminance / rtUniform.lightWeightTotal *
     hitDistance * hitDistance / max(cosLight, 1e-8);
   return bsdfMISWeight((*path).scatteringPdf, lightPdf);
@@ -408,6 +484,7 @@ ${hasCoatNormals ? /* wgsl */ `
   }
   (*path).scatteringPdf = scatteringPdf;
   (*path).ray.d = scatterDir;
+  (*path).paneCrossed = false;
   if (mediumSampled) {
     (*path).isNextRefraction = false;
   }

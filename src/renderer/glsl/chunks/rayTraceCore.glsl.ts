@@ -89,6 +89,8 @@ struct OpenPbrResolvedMaterial {
   vec3 emission;
   float transmissionWeight;
   bool thinWalled;
+  // A thin pane (MaterialTable isThinPane): passed or mirrored, never shaded.
+  bool thinPane;
   float specularAnisotropy;
   float alpha;
 
@@ -190,6 +192,12 @@ struct Path {
   float scatteringPdf;
   bool scatteringIsDelta;
   bool isNextRefraction;
+  // Thin panes passed straight through; they do not spend the bounce budget.
+  int paneEvents;
+  // Since the last scattering vertex the path passed a thin pane; paneOrigin
+  // is that vertex's ray origin, for MIS of the light reached behind it.
+  bool paneCrossed;
+  vec3 paneOrigin;
 };
 
 struct LightSampleRec {
