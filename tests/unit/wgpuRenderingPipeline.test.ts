@@ -54,6 +54,8 @@ const mocks = vi.hoisted(() => {
     updatePipeline() {}
     isCompilingShader() { return false; }
     isPipelineReady() { return true; }
+    pipelineError: Error | undefined = undefined;
+    getPipelineError() { return this.pipelineError; }
     hasShadowCatcher() { return false; }
     needsDenoiseAlpha() { return false; }
     getOutputBuffer() { return {}; }
@@ -173,6 +175,15 @@ it('restarts accumulation after changing the sampling pattern', () => {
   pipeline.configure({bounces: 3, clamping: 0, bevel: true, bevelSamples: 8, directLightCandidates: 4, dispersionWavelengths: 3, alphaBlendStrategy: 'stochastic', samplingPattern: 'zsobol', maxSamples: 4, transmissiveOutputAlphaMin: 1, timeBudgetMs: 21, maxTiles: Infinity, allowMultipleSamplesPerFrame: false}); pipeline.activate(); pipeline.restartSamples();
   pipeline.activate(); pipeline.trace(camera,4); pipeline.present();
   expect(trace.setSampleCount.mock.calls.map(([value])=>value)).toEqual([0,1,2,3]);
+});
+
+it('throws a failed pipeline from trace instead of reporting it compiling', () => {
+  const pipeline = createPipeline(false);
+  const trace = mocks.TracePass.latest;
+  const failure = new TypeError('drawImage: the image is not a CanvasImageSource');
+  trace.pipelineError = failure;
+  trace.isPipelineReady = () => false;
+  expect(() => pipeline.trace(new Camera({projection: 'perspective'}), 4)).toThrow(failure);
 });
 
 function completedDenoiser(): OIDNWeb {

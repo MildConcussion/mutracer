@@ -813,6 +813,11 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
 
     rayTracePass.updatePipeline();
 
+    // A pipeline that failed is not retried until a pipeline-affecting setting changes (its failed signature): the
+    // render reports the failure ('error' status and the engine's 'error' event) instead of compiling forever
+    const failed = rayTracePass.isCompilingShader() ? undefined : rayTracePass.getPipelineError();
+    if (failed) throw failed;
+
     if (rayTracePass.isCompilingShader() || !rayTracePass.isPipelineReady()) {
       isFirstFrame = true;
       sampleCount = 0;

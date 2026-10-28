@@ -481,7 +481,8 @@ class WGPURayTracePass {
 
   private _isCompilingShader = false;
   private _shaderCompilationDiagnostics?: ShaderCompilationDiagnostics;
-  private _pipelineError: unknown;
+  /** Why the last pipeline update failed; kept until a pipeline-affecting setting changes and a new attempt starts */
+  private _pipelineError: Error | undefined;
   // Fold scene invariants before backend inlining; runtime edits use uniforms.
   private _bakePipelineConstants = true;
   private _failedPipelineSignature?: string;
@@ -1302,7 +1303,7 @@ ${rayTraceCompute({
       }
       this._failedPipelineSignature = undefined;
     } catch (error) {
-      this._pipelineError = error;
+      this._pipelineError = error instanceof Error ? error : new Error(getWebGPUErrorMessage(error));
       const failedAt = shaderCompilationNow();
       if (this._shaderCompilationDiagnostics?.status === 'compiling') {
         this._shaderCompilationDiagnostics = {
@@ -1400,7 +1401,7 @@ ${rayTraceCompute({
     );
   }
 
-  getPipelineError() {
+  getPipelineError(): Error | undefined {
     return this._pipelineError;
   }
 

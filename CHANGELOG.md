@@ -10,6 +10,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Smooth, untextured, thin-walled glass is a thin pane on WebGPU and WebGL 2: lights and the environment are sampled through it, so daylight reaches a room through its windows. See [window glass](docs/materials.md#window-glass).
 - `userData.mutracerOpenPBR` accepts the base inputs `transmissionWeight`, `transmissionColor`, `specularRoughness`, `baseMetalness` and `specularIor`, so a `MeshStandardMaterial` can path-trace as glass while the live Three.js view keeps it unchanged.
 
+### Fixed
+
+- A WebGPU ray tracing pipeline that fails to build (a shader, or a material texture the atlas cannot draw) ends the render with status `'error'` and the engine's `'error'` event, instead of reporting `'compiling'` forever.
+
 ## 0.1.3 - 2026-10-19
 
 ### Changed
