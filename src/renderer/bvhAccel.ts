@@ -239,7 +239,8 @@ export function buildBLAS(
   }
   if (!count) return emptyBvh(false);
 
-  const bvh = buildBinnedSahBvh(aabbs, count);
+  // Bounded to the traversal stack, which getTraversalStackSizes caps there.
+  const bvh = buildBinnedSahBvh(aabbs, count, { maxDepth: MAX_TRAVERSAL_STACK_SIZE });
   const { order, offsets, vec4Count, maxDepth, maxLeafPrimitives } = layoutBvh2(bvh);
   const { bounds, leftFirst, primCount, primIndices } = bvh;
   const buffer = new ArrayBuffer(vec4Count * 16);
@@ -367,7 +368,15 @@ export function buildTLAS(
     instanceBounds(readMeshInstance(instances, i), aabbs, i * 6);
   }
 
-  const bvh = buildBinnedSahBvh(aabbs, instances.length, TLAS_INSTANCE_COST);
+  // Instances span 20 m tree parts to 256 km ground rings: bins over their
+  // centroids, or a ring among a forest leaves the forest in one leaf (19 691
+  // instances on the vaadi site). Bounded to the traversal stack, which
+  // getTraversalStackSizes caps there: a deeper tree would overflow it.
+  const bvh = buildBinnedSahBvh(aabbs, instances.length, {
+    intersectionCost: TLAS_INSTANCE_COST,
+    maxDepth: MAX_TRAVERSAL_STACK_SIZE,
+    centroidBins: true
+  });
   const { order, offsets, vec4Count, maxDepth, maxLeafPrimitives } = layoutBvh2(bvh);
   const { bounds, leftFirst, primCount, primIndices } = bvh;
   const buffer = new ArrayBuffer(vec4Count * 16);

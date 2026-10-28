@@ -4,8 +4,10 @@ import { buildBinnedSahBvh, layoutBvh2 } from '../../src/renderer/binnedSahBvh';
 import {
   Box3,
   INSTANCE_WORD_STRIDE,
+  MAX_TRAVERSAL_STACK_SIZE,
   buildBLAS,
   buildTLAS,
+  getTraversalStackSizes,
   refitBLAS,
   type BLASInstance,
   type FlattendBVH,
@@ -149,6 +151,20 @@ describe('binned SAH builder', () => {
   it('returns an empty hierarchy without primitives', () => {
     expect(buildBinnedSahBvh(new Float32Array(0), 0).nodeCount).toBe(0);
   });
+
+  it('turns nodes at the depth bound into leaves', () => {
+    // Boxes at 2^i: each split peels the farthest box off, a chain as deep
+    // as the box count.
+    const count = 40;
+    const aabbs = new Float32Array(count * 6);
+    for (let i = 0; i < count; i++) aabbs.set([2 ** i, 0, 0, 2 ** i + 1, 1, 1], i * 6);
+    expect(layoutBvh2(buildBinnedSahBvh(aabbs, count)).maxDepth).toBeGreaterThan(8);
+    const bounded = buildBinnedSahBvh(aabbs, count, { maxDepth: 8 });
+    expect(layoutBvh2(bounded).maxDepth).toBe(8);
+    expect(Array.from(bounded.primIndices).sort((a, b) => a - b)).toEqual(
+      Array.from({ length: count }, (_, i) => i)
+    );
+  });
 });
 
 describe('BLAS build', () => {
@@ -243,6 +259,34 @@ describe('TLAS build', () => {
     visit(0);
     expect(seen.sort((a, b) => a - b)).toEqual(instances.map((_, i) => i));
     expect(tlas.instancesBuffer!.byteLength).toBe(instances.length * INSTANCE_WORD_STRIDE * 4);
+  });
+
+  it('splits a forest that one ground-sized instance stretches, within the traversal stack', () => {
+    // The vaadi site: 20 000 trees over 1.6 by 1.6 km and a 13 km ground ring
+    // whose centre lies among them. Bins over the node's bounds (1.6 km wide
+    // each) put every centroid, the ring's too, into one bin on every axis, so
+    // the node could not be split: on dev it was one leaf of 19 691 instances
+    // that every ray on the site walked.
+    const blases: BLASInstance[] = [
+      { bvh: { buffer: new ArrayBuffer(48), maxDepth: 1, layout: 'bvh2' }, trainglesCount: 1, verticesCount: 3 }
+    ];
+    let seed = 7;
+    const random = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    const instance = (min: [number, number, number], max: [number, number, number]): TLASInstance => {
+      const bounds = new Box3();
+      bounds.min = min;
+      bounds.max = max;
+      return { blasIndex: 0, bounds, transform: mat4.create(), materialsIndices: [0] };
+    };
+    const instances = Array.from({ length: 20_000 }, () => {
+      const x = 10 + random() * 1590, z = 10 + random() * 1590, s = 2 + random() * 8;
+      return instance([x - s / 2, 65, z - s / 2], [x + s / 2, 71, z + s / 2]);
+    });
+    instances.push(instance([-6440, 62, -6440], [6440, 74, 6440]));
+    const tlas = buildTLAS(instances, blases);
+    expect(tlas.maxDepth).toBeLessThanOrEqual(MAX_TRAVERSAL_STACK_SIZE);
+    expect(getTraversalStackSizes(tlas, blases).tlas).toBeGreaterThanOrEqual(tlas.maxDepth);
+    expect(tlas.maxLeafPrimitives).toBeLessThanOrEqual(8);
   });
 
   it('pads instance bounds by the scaled displacement', () => {

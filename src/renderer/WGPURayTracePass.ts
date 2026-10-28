@@ -1598,7 +1598,12 @@ ${rayTraceCompute({
         tlasTraversalStackSize:
           this._constants.TLAS_STACK_SIZE as number | undefined,
         blasTraversalStackSize:
-          this._constants.BLAS_STACK_SIZE as number | undefined
+          this._constants.BLAS_STACK_SIZE as number | undefined,
+        // The TLAS's own depth and largest leaf: the stack size above is
+        // capped, so a deeper TLAS would show only here.
+        tlasMaxDepth: this._tlas?.maxDepth,
+        tlasMaxLeafPrimitives: this._tlas?.maxLeafPrimitives,
+        tlasInstances: this._preparedMeshData?.instances.length
       }
     };
   }
@@ -2490,10 +2495,13 @@ ${rayTraceCompute({
         maxTextureArrayLayers: this._device.limits.maxTextureArrayLayers,
         maxTextureDimension2D: this._device.limits.maxTextureDimension2D
       });
-      this._updateTextures(materialData);
     } else materialData.repackParams(res.materials);
-    this._materialsBuffer = this._updateGPUBuffer('Materials', this._materialsBuffer, materialData.getBufferArray(), MATERIAL_FLOAT_COUNT * 4);
+    // NUM_MAPS sizes the map uniform that _updateTextures packs: update the
+    // constants first, as the first build does, or a texture edit that adds
+    // maps packs them into the old, smaller uniform.
     this._updateMaterialConstants(res.materials, materialData, res.geometry);
+    if (update.level === 'textures') this._updateTextures(materialData);
+    this._materialsBuffer = this._updateGPUBuffer('Materials', this._materialsBuffer, materialData.getBufferArray(), MATERIAL_FLOAT_COUNT * 4);
     if (update.emission || update.emissiveMap) {
       const resident = this._residentPreparedMeshData!;
       resident.emissiveBindings = resident.instanceBindings.filter(binding =>

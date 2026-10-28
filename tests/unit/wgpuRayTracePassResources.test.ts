@@ -293,4 +293,38 @@ describe('WGPURayTracePass output resource lifetime', () => {
     pass.setMeshes([mesh]);
     expect(pass._geometriesNeedRefit.size).toBe(0);
   });
+
+  it('sizes the map uniform for the new map count when a texture edit adds maps', () => {
+    vi.stubGlobal('GPUTextureUsage', { TEXTURE_BINDING: 1, COPY_DST: 2, RENDER_ATTACHMENT: 4 });
+    try {
+      const pass = Object.create(WGPURayTracePass.prototype) as Record<string, any>;
+      const writeBuffer = vi.fn();
+      pass._device = {
+        queue: { writeBuffer, writeTexture: vi.fn() },
+        createTexture: vi.fn(() => ({ destroy: vi.fn() })),
+        limits: { maxTextureArrayLayers: 256, maxTextureDimension2D: 8192 }
+      };
+      pass._uniformBuffer = (size: number) => ({ size, destroy: vi.fn() });
+      pass._updateGPUBuffer = vi.fn();
+      pass._materialChanges = { capture: vi.fn() };
+      pass._analyticLights = [];
+      pass._constants = { NUM_MAPS: 20 };
+      pass._mapInfoUniform = { size: 20 * 48, destroy: vi.fn() };
+      // 25 maps: the constants round NUM_MAPS up to 30.
+      const materials = Array.from({ length: 25 }, () => new OpenPBRMaterial({
+        map: new Texture({ width: 1, height: 1, data: new Uint8Array([1, 1, 1, 1]) })
+      }));
+      pass._preparedMeshData = { materials, geometry: {} };
+      pass._materialData = new MaterialTable([], []);
+      pass._pendingMaterialUpdate = { level: 'textures', emission: false, emissiveMap: false, materials };
+
+      pass._updateMaterialData();
+
+      expect(pass._constants.NUM_MAPS).toBe(30);
+      expect(pass._mapInfoUniform.size).toBe(30 * 48);
+      expect((writeBuffer.mock.calls.at(-1)![2] as Float32Array).length).toBe(30 * 12);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

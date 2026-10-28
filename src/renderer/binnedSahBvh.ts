@@ -12,7 +12,8 @@
 // stack grows instead of turning a node into a leaf after 512 entries, and
 // arithmetic is float64: near-equal split costs can resolve differently from
 // TinyBVH's float32, giving trees of the same quality that are not
-// byte-identical.
+// byte-identical. Two options leave the reference: bins over the centroid
+// bounds instead of the node bounds, and a depth bound.
 
 const BINS = 8;
 const C_INT = 1;
@@ -61,14 +62,36 @@ function growBin(
   binMax[o + 2] = Math.max(binMax[o + 2], maxZ);
 }
 
+export interface BinnedSahOptions {
+  /**
+   * Cost of one primitive relative to one node traversal (C_TRAV = 1).
+   * Default 1, as TinyBVH for triangles.
+   */
+  intersectionCost?: number;
+  /**
+   * Deepest node, the root being 1: a node there stays a leaf, so a traversal
+   * stack of maxDepth entries always holds the tree. Default unbounded.
+   */
+  maxDepth?: number;
+  /**
+   * Bins span the node's centroid bounds instead of its bounds. Without it,
+   * one huge primitive (a 13 km ground ring among 20 000 trees) stretches a
+   * node so far that every centroid falls into one bin on every axis, and the
+   * node cannot be split at all. Default false, as the reference.
+   */
+  centroidBins?: boolean;
+}
+
 /**
  * Builds a binary BVH over axis-aligned boxes.
  * @param aabbs min x, y, z, max x, y, z for each primitive.
  * @param count number of primitives in `aabbs`.
- * @param intersectionCost cost of one primitive relative to one node
- *   traversal (C_TRAV = 1). Default 1, as TinyBVH for triangles.
  */
-export function buildBinnedSahBvh(aabbs: Float32Array, count: number, intersectionCost = C_INT): BinnedSahBvh {
+export function buildBinnedSahBvh(
+  aabbs: Float32Array,
+  count: number,
+  { intersectionCost = C_INT, maxDepth = Infinity, centroidBins = false }: BinnedSahOptions = {}
+): BinnedSahBvh {
   const capacity = Math.max(1, count * 2 - 1);
   const bounds = new Float32Array(capacity * 6);
   const leftFirst = new Uint32Array(capacity);
@@ -106,15 +129,18 @@ export function buildBinnedSahBvh(aabbs: Float32Array, count: number, intersecti
   const minDimZ = (rootMaxZ - rootMinZ) * 1e-20;
 
   let newNode = 1;
+  // Pending right children and their depths (the root is depth 1, as in layoutBvh2).
   const tasks: number[] = [];
-  let nodeIndex = 0;
+  let nodeIndex = 0, depth = 1;
   while (true) {
     while (true) {
+      // A node at the depth bound stays a leaf, so the tree fits a traversal
+      // stack of maxDepth entries.
+      if (depth >= maxDepth) break;
       const nb = nodeIndex * 6;
-      const nMinX = bounds[nb], nMinY = bounds[nb + 1], nMinZ = bounds[nb + 2];
-      const extentX = bounds[nb + 3] - nMinX;
-      const extentY = bounds[nb + 4] - nMinY;
-      const extentZ = bounds[nb + 5] - nMinZ;
+      const extentX = bounds[nb + 3] - bounds[nb];
+      const extentY = bounds[nb + 4] - bounds[nb + 1];
+      const extentZ = bounds[nb + 5] - bounds[nb + 2];
       const area = extentX * extentY + extentY * extentZ + extentZ * extentX;
       if (area === 0) break; // can't split an infinitely small node.
 
@@ -122,9 +148,28 @@ export function buildBinnedSahBvh(aabbs: Float32Array, count: number, intersecti
       const nodePrims = primCount[nodeIndex];
       // Every split of a single primitive leaves one side empty.
       if (nodePrims === 1) break;
-      const scaleX = extentX > minDimX ? BINS / extentX : 0;
-      const scaleY = extentY > minDimY ? BINS / extentY : 0;
-      const scaleZ = extentZ > minDimZ ? BINS / extentZ : 0;
+      // The span the bins divide: the node's bounds, as the reference, or the
+      // bounds of its centroids.
+      let nMinX = bounds[nb], nMinY = bounds[nb + 1], nMinZ = bounds[nb + 2];
+      let binSpanX = extentX, binSpanY = extentY, binSpanZ = extentZ;
+      if (centroidBins) {
+        let cMaxX = -FAR, cMaxY = -FAR, cMaxZ = -FAR;
+        nMinX = nMinY = nMinZ = FAR;
+        for (let i = first, end = first + nodePrims; i < end; i++) {
+          const c = primIndices[i] * 3;
+          const x = centers[c], y = centers[c + 1], z = centers[c + 2];
+          if (x < nMinX) nMinX = x;
+          if (x > cMaxX) cMaxX = x;
+          if (y < nMinY) nMinY = y;
+          if (y > cMaxY) cMaxY = y;
+          if (z < nMinZ) nMinZ = z;
+          if (z > cMaxZ) cMaxZ = z;
+        }
+        binSpanX = cMaxX - nMinX; binSpanY = cMaxY - nMinY; binSpanZ = cMaxZ - nMinZ;
+      }
+      const scaleX = binSpanX > minDimX ? BINS / binSpanX : 0;
+      const scaleY = binSpanY > minDimY ? BINS / binSpanY : 0;
+      const scaleZ = binSpanZ > minDimZ ? BINS / binSpanZ : 0;
 
       for (let i = 0; i < 3 * BINS * 3; i++) {
         binMin[i] = FAR;
@@ -150,7 +195,7 @@ export function buildBinnedSahBvh(aabbs: Float32Array, count: number, intersecti
       let splitCost = FAR;
       let bestAxis = 0, bestPos = 0;
       for (let axis = 0; axis < 3; axis++) {
-        const extent = axis === 0 ? extentX : axis === 1 ? extentY : extentZ;
+        const extent = axis === 0 ? binSpanX : axis === 1 ? binSpanY : binSpanZ;
         const minDim = axis === 0 ? minDimX : axis === 1 ? minDimY : minDimZ;
         if (!(extent > minDim)) continue;
         let lMinX = FAR, lMinY = FAR, lMinZ = FAR, lMaxX = -FAR, lMaxY = -FAR, lMaxZ = -FAR;
@@ -219,10 +264,12 @@ export function buildBinnedSahBvh(aabbs: Float32Array, count: number, intersecti
       leftFirst[n] = first; primCount[n] = leftPrims;
       leftFirst[n + 1] = j; primCount[n + 1] = rightPrims;
       leftFirst[nodeIndex] = n; primCount[nodeIndex] = 0;
-      tasks.push(n + 1);
+      depth++;
+      tasks.push(n + 1, depth);
       nodeIndex = n;
     }
     if (!tasks.length) break;
+    depth = tasks.pop()!;
     nodeIndex = tasks.pop()!;
   }
 
