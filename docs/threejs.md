@@ -45,6 +45,10 @@ For an application-owned animation frame, update the animation mixer first,
 then call `loop.tick()`. With first-layer frame control, call `sync.update()`,
 `engine.update()`, `render.refine()` and `engine.display.present(render)` in order.
 
+For a library-generated sky, pass `environment: new ProceduralSky()` in the
+conversion or sync options. See [ProceduralSky](./api.md#proceduralsky) for
+configuration and backend limits.
+
 ## What is converted
 
 | Three.js | MuTracer |
@@ -62,13 +66,14 @@ then call `loop.tick()`. With first-layer frame control, call `sync.update()`,
 | `SkinnedMesh` / mesh with morph targets | CPU-deformed dynamic geometry |
 | `InstancedMesh` | One InstancedMesh per material group, with native colors, sharing geometry and BLAS |
 | Multi-material groups | One MuTracer mesh per group |
+| Geometry `color` with `material.vertexColors = true` | Linear RGB colors modulate base color and unlit output, including base-color textures and instance colors; RGBA inputs use RGB only (vertex alpha is unsupported) |
 | `DirectionalLight` | `DirectionalLight` |
 | `PointLight` | `SphereLight` (radius `userData.mutracerRadius`, default 0.25) |
-| `SpotLight` | `SpotLight` (radius `userData.mutracerRadius`, default 0.01; `penumbra` sets the inner angle) |
+| `SpotLight` | `SpotLight` (radius `userData.mutracerRadius`, default 0.01; `penumbra` sets the inner angle, with the same smooth falloff as Three.js) |
 | `RectAreaLight` | `RectLight` |
 | `AmbientLight` | `AmbientLight` |
-| `scene.environment` (equirectangular float `DataTexture`, e.g. from `HDRLoader`/`RGBELoader`) | `EnvironmentLight` |
-| `scene.background` color / texture | Background; the environment itself when `background === environment` |
+| `scene.environment` (equirectangular float `DataTexture`, e.g. from `HDRLoader`/`RGBELoader`) | `EnvironmentLight`; orientation follows Three.js, so a `DataTexture` with `flipY = false` has its first row at the bottom |
+| `scene.background` color / texture | Explicit background, independent of environment lighting |
 
 Three.js `opacity` maps to `geometryOpacity`; thin-shell choices map to
 `geometryThinWalled`. Metadata accepts the five [canonical and compatibility
@@ -76,6 +81,33 @@ names](./materials.md#compatibility-names), using the constructor's equal-value
 or conflict rule. These overrides apply after standard conversion; alpha mode
 still follows the source material flags and resolved coverage. Naming does not
 change transmission, volume or anisotropy conversion semantics.
+
+Material `DataTexture` inputs support Red, RG, RGB and RGBA layouts, including
+half-float data. Missing color channels become zero and missing alpha becomes
+one. Decoded images use additional CPU memory and are reused until the source
+texture is updated; set `texture.needsUpdate = true` after pixel edits.
+
+`FrontSide`, `BackSide` and `DoubleSide` preserve the rendered face and normal
+orientation. Later `material.side` edits synchronize automatically. Using both
+front and back sides of shared geometry requires additional geometry memory.
+
+Material color textures honor `LinearSRGBColorSpace` and `SRGBColorSpace`;
+`NoColorSpace` reads color channels as linear. Data-map channels are always
+linear. Color-space edits synchronize automatically.
+
+Material textures preserve independent `wrapS` and `wrapT`: repeat,
+clamp-to-edge and mirrored repeat. UV repeat and offset apply before wrapping;
+later wrap edits synchronize automatically. Displacement uses the same modes.
+
+`scene.environmentIntensity` scales environment lighting (`0` disables it);
+ambient lights and explicit backgrounds keep their own brightness.
+`scene.backgroundIntensity` scales an explicit texture background; colors are
+unaffected. `scene.environmentRotation` and `scene.backgroundRotation`
+independently rotate environment lighting and explicit texture backgrounds. All
+of these synchronize automatically; rotations preserve Euler order. An unset
+background follows the environment. `mutracerGroundedSkybox` uses only its own
+`rotation` (default `0`) and `intensity` (default `1`), ignoring
+`scene.backgroundRotation` and `scene.backgroundIntensity`.
 
 Thin-film ranges keep their endpoint order, including minimum greater than
 maximum, and retain the converter's 0–20 µm endpoint clamp. The converter uses
@@ -85,15 +117,18 @@ or a source `THREE.Texture`. `THREESync` converts parameter edits without
 rewriting texture pixels. The iridescence strength texture is not supported;
 `thinFilmMap` represents thickness only.
 
-The six layer maps reuse the texture conversion cache, source UV channel,
-scale, offset and flipY. `mutracerOpenPBR` can override them with a MuTracer
+The six layer maps preserve the source UV channel, scale, offset and `flipY`.
+`mutracerOpenPBR` can override them with a MuTracer
 `Texture` or `THREE.Texture`; explicit `null` clears an imported map, while
-unknown JSON objects are ignored. `THREESync` follows texture edits without
-copying pixels. General `KHR_texture_transform` rotation remains unsupported.
-Clearcoat normals are deferred to the independent coat-frame implementation.
+unknown JSON objects are ignored. `THREESync` follows texture edits.
+General `KHR_texture_transform` rotation remains unsupported.
+See [coat normal conversion](#coat-normal-conversion) for clearcoat normal maps.
 Anisotropy direction and source-model mapping are described [below](#anisotropy-source-conversion). The conversion preserves OpenPBR layering: glTF sheen
 layer order differs, and specular weight/color also affect metals in OpenPBR;
-these imports do not imply identical glTF BRDFs.
+these imports do not imply identical glTF BRDFs. A fully metallic material
+(`metalness` 1 without `metalnessMap`) ignores `specularIntensity`,
+`specularColor` and their maps, as in glTF. Partially metallic or
+metalness-mapped materials keep them, so their metal lobe is scaled too.
 
 Invisible objects are skipped. Other material types are skipped with a console
 warning unless `convertMaterial` supplies an OpenPBR material. `BatchedMesh`, instanced morph targets (`morphTexture`) and skinned
@@ -179,7 +214,7 @@ Renderer-specific settings without a Three.js equivalent:
 | `mutracerThinFilmMap` | material | Native R thickness texture with minimum 0; takes precedence over `iridescenceThicknessMap` |
 | `mutracerRadius` | point / spot light | Emitter radius |
 | `mutracerIesProfile`, `mutracerIesRotation` | spot light | `IESProfile` instance; rotation becomes local-Z transform rotation |
-| `mutracerGroundedSkybox: { texture, height, radius, groundHeight?, center? }` | scene | Grounded skybox background |
+| `mutracerGroundedSkybox: { texture, height, radius, groundHeight?, center?, rotation?, intensity? }` | scene | Grounded skybox background; rotation/intensity options follow [SceneBackground](./api.md#scene-types) |
 | `mutracerHiddenBackground: true` | scene | Transparent background while keeping environment lighting |
 
 Directional and spot lights use their world position and target to build a

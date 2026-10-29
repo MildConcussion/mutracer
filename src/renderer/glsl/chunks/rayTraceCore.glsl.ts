@@ -4,7 +4,7 @@
 
 import { createShaderMixin, glsl, Shader } from '../../shader.js';
 import { ShadowCatcherMaterial, UnlitMaterial } from '../../../constants.js';
-import { CONSTANT_SPOT_LIGHT } from '../../lightsUtil.js';
+import { CONSTANT_SPOT_LIGHT } from '../../lightConstants.js';
 
 export default createShaderMixin({
   uniforms: {
@@ -42,7 +42,7 @@ struct SurfaceInteraction {
   bool hit;
   vec3 position;
   vec3 normal; // material shading normal
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
   vec3 coatNormal;
 #endif
   vec3 vertexNormal; // interpolated mesh normal before normal mapping
@@ -50,6 +50,7 @@ struct SurfaceInteraction {
   
   vec2 uv;
   vec2 uv1;
+  vec3 vertexColor;
 
 #ifdef USE_TANGENT
   vec3 tangent;
@@ -127,7 +128,7 @@ struct OpenPbrResolvedMaterial {
   vec3 directionBitangent;
   vec3 geometryTangent;
   vec3 geometryBitangent;
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
   vec3 coatNormal;
   bool coatNormalEnabled;
   vec3 geometricNormal;
@@ -285,8 +286,8 @@ float sampleIESProfile(int baseTexel, vec2 uv) {
 float evaluateSpotEmissionMultiplier(Light light, vec3 lightToSurface) {
   vec3 axis = normalize(light.u);
   float cosTheta = dot(axis, lightToSurface);
-  float cone = light.v.y > 1e-6
-    ? smoothstep(light.v.x, light.v.x + light.v.y, cosTheta)
+  float cone = light.v.y > light.v.x + 1e-6
+    ? smoothstep(light.v.x, light.v.y, cosTheta)
     : step(light.v.x, cosTheta);
   if (cone <= 0.0 || light.textureIndex < 0) return cone;
   vec3 xAxis = light.iesReference;

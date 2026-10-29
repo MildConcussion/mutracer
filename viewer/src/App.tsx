@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { X } from 'lucide-react';
+import { Toast } from './components/Toast';
 import { setSettings, setUi, useViewer } from './store';
 import { getEngine } from './engine/ViewerEngine';
 import { redo, undo } from './history';
@@ -10,6 +10,7 @@ import { Inspector, InspectorRail, TABS } from './components/Inspector';
 import { ExportDialog } from './components/ExportDialog';
 import { CodeDialog } from './components/CodeDialog';
 import { TextureBrowser } from './components/TextureBrowser';
+import { ExamplesPanel } from './components/ExamplesBrowser';
 
 const MOBILE_QUERY = '(max-width: 768px), (max-width: 1024px) and (max-height: 500px) and (orientation: landscape) and (pointer: coarse)';
 
@@ -74,7 +75,9 @@ export function App() {
   useShortcuts();
   const left = ui.left && !ui.hidden && !mobile;
   const right = ui.right && !ui.hidden && !mobile;
-  const browse = right && ui.textureBrowser && ui.tab === 'material';
+  const textures = right && ui.textureBrowser && ui.tab === 'material';
+  const examples = right && ui.examplesPinned && !textures;
+  const browse = textures || examples;
   return (
     <div className="app" data-hidden={ui.hidden || undefined}>
       {!ui.hidden && <Toolbar mobile={mobile} />}
@@ -82,7 +85,8 @@ export function App() {
         data-sheet={(mobile && ui.right && !ui.hidden) || undefined}>
         {left && <SceneTree />}
         <Viewport />
-        {browse && <TextureBrowser />}
+        {textures && <TextureBrowser />}
+        {examples && <ExamplesPanel />}
         {right && <Inspector mobile={false} />}
         {!mobile && !ui.hidden && <InspectorRail />}
         {mobile && ui.right && !ui.hidden && <Inspector mobile />}
@@ -90,22 +94,6 @@ export function App() {
       <ExportDialog />
       <CodeDialog />
       <Toast />
-    </div>
-  );
-}
-
-function Toast() {
-  const toast = useViewer((s) => s.toast);
-  useEffect(() => {
-    if (!toast) return;
-    const timer = setTimeout(() => useViewer.setState({ toast: null }), toast.tone === 'error' ? 7000 : 3500);
-    return () => clearTimeout(timer);
-  }, [toast]);
-  if (!toast) return null;
-  return (
-    <div className="toast" role={toast.tone === 'error' ? 'alert' : 'status'} data-tone={toast.tone} key={toast.id}>
-      <span>{toast.message}</span>
-      <button className="icon-btn icon-btn--bare xs" aria-label="Dismiss" onClick={() => useViewer.setState({ toast: null })}><X size={12} /></button>
     </div>
   );
 }

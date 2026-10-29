@@ -5,17 +5,21 @@ its .bin and textures) or a Radiance .hdr, browse the scene tree, edit OpenPBR
 materials, lighting, camera and render settings, play glTF animations and
 export PNGs.
 
+Drag a numeric input left or right to adjust its value, or click it to type.
+Enter or clicking elsewhere commits typed edits; Escape cancels them. While
+editing text, dragging selects text instead of changing the value.
+
 In the material panel, upload or drop a height image into the Displacement
 texture slot, then adjust Scale (`displacementScale`) in the Displacement
 section, which is expanded by default. Bias shifts the surface along its normal:
 `offset = texture × Scale + Bias`. Both use mesh-local units; Bias defaults to
 `0`. Set Bias to `-Scale / 2` for centered displacement. Scale's slider covers
 0–10% of the selected mesh's longest local side, and Bias covers the same
-distance in both directions, with precision adjusted to mesh size. Double-click
-to enter a value outside those ranges. Selecting another mesh changes the range
-without changing the material's values. A map is required even when Scale is
-`0` and Bias is nonzero. Meshes without UVs automatically use triplanar
-coordinates when a height map is applied.
+distance in both directions, with precision adjusted to mesh size. Use the
+separate numeric inputs to enter values outside those ranges. Selecting another
+mesh changes the range without changing the material's values. A map is required
+even when Scale is `0` and Bias is nonzero. Meshes without UVs automatically use
+triplanar coordinates when a height map is applied.
 Displacement requires WebGPU; its controls are disabled on WebGL 2.
 
 In the Poly Haven texture browser, enable Download displacement map before
@@ -24,6 +28,13 @@ default and adds download and rendering time. Applying a set replaces the
 previous displacement map; leaving the option off clears it. Height maps and
 their settings support undo, redo and restoration when reloading the cached
 model, like other material edits.
+
+Under Material → Textures, expand a loaded texture's Wrap & repeat controls.
+Choose Repeat, Clamp to edge or Mirrored repeat independently for S/T, and use
+the Repeat S/T numeric inputs to set each axis's repeat count. Negative values
+flip an axis; zero samples a constant coordinate. Edits support undo/redo and
+are restored with the cached model.
+Uploaded images keep the UV transform and wrapping of the texture they replace.
 
 The Export dialog can download the current viewport PNG immediately, preserving
 its displayed appearance and pixel size without restarting the render. Render PNG
@@ -67,7 +78,6 @@ src/
                            animation, export. No React.
   engine/loadModel.ts      GLTFLoader for URLs, files and dropped folders;
                            the procedural material-sphere scene
-  engine/environment.ts    Procedural sky, HDR loading, baked intensity/rotation
   engine/codeSnippet.ts    Standalone program generated from the current view
   engine/studio.ts         Studio lighting presets: rect-light rigs scaled to
                            the model, and their dim ambient fill
@@ -100,15 +110,13 @@ Notes:
   step. Camera settings, which follow the view, and switches to or from an
   uploaded .hdr are not recorded. Opening a model drops its material steps and
   keeps the settings steps.
-  Uploaded images are decoded like GLTFLoader (no premultiplication or color
-  space conversion) and keep the UV transform of the texture they replace.
 - Material edits of the cached model, including the original files of uploaded
   textures, are saved in a second OPFS archive keyed by the model and by each
   material's traversal order. Reloads reapply them as materials are converted;
   opening any model (including choosing the same example again) discards them
   and the undo history.
-- `EnvironmentLight` has no intensity or rotation, so both are baked into a copy
-  of the HDR pixels.
+- Environment intensity and rotation apply to the lighting and HDRI background,
+  including Grounded mode. Rotation keeps the ground level.
 - Downloaded HDR files are cached by URL (including resolution and query string)
   in the browser's origin private file system (OPFS), and reused across reloads.
   Invalid cached files are downloaded again; unavailable or full storage falls
@@ -128,13 +136,8 @@ Notes:
   `dist-viewer/`, and the site build shares one copy with the examples.
 - Opening the viewer with `#open=files` loads files that the home page stashed
   in IndexedDB (`engine/droppedFiles.ts`).
-- All example-model previews are managed in the independent
-  [mutracer-assets](https://github.com/pissang/mutracer-assets) repository, including
-  Material spheres, Toy Car and Sheen Chair. They use 720 × 405 WebP (quality 80%),
-  Studio Light and OIDN standard; their saved cameras also apply on fresh loads.
-  Render and review them through that repository's import pipeline. The viewer's
-  `await generateThumbnails()` console tool only generates local material swatches
-  in `src/assets/thumbnails/` (checker cyclorama, dimmed environment light).
+- For sample models, rendering benchmarks, imported lighting and camera choices, see the
+  [viewer guide](../docs/viewer.md).
 - The visual language comes from DropMesh (same author).
 
 ## Assets
@@ -149,7 +152,7 @@ Example models are loaded on demand. Downloads retry temporary network or server
 failures up to twice; samples hosted on jsDelivr use GitHub as the final fallback.
 Material spheres are procedural; Toy Car
 and Sheen Chair come from [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets)
-(CC0). Model previews and credits are available in
+(CC0). Additional model previews and credits are available in
 [mutracer-assets](https://github.com/pissang/mutracer-assets).
 
 The sample site is a free, noncommercial technical demonstration. Each Sketchfab

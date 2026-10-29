@@ -7,66 +7,153 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Environment portals: `EnvironmentLight({portals})` lights a room through its windows (WebGPU).
 - Smooth, untextured, thin-walled glass is a thin pane on WebGPU and WebGL 2: lights and the environment are sampled through it, so daylight reaches a room through its windows. See [window glass](docs/materials.md#window-glass).
 - `userData.mutracerOpenPBR` accepts the base inputs `transmissionWeight`, `transmissionColor`, `specularRoughness`, `baseMetalness` and `specularIor`, so a `MeshStandardMaterial` can path-trace as glass while the live Three.js view keeps it unchanged.
 
 ### Fixed
 
+- The TLAS bins over its instances' centroids and both BVH levels are bounded to the traversal stack, so a ground ring among a forest no longer leaves the forest in one leaf.
+- Alpha-mask cut-outs are skipped during closest-hit traversal.
 - A WebGPU ray tracing pipeline that fails to build (a shader, or a material texture the atlas cannot draw) ends the render with status `'error'` and the engine's `'error'` event, instead of reporting `'compiling'` forever.
+
+## 0.2.0 - 2026-10-28
+
+Faster WebGPU rendering, surface AOVs and procedural skies.
+
+### Performance
+
+Compared with v0.1.5, WebGPU shader compilation and rendering are faster across a 10-scene glTF benchmark (geometric means across scenes):
+
+| GPU | Shader compilation | Render time |
+| --- | ---: | ---: |
+| Apple M4 Max | -53.8% | -25.6% |
+| NVIDIA RTX 4060 Laptop GPU (Windows 11) | -74.5% | -40.9% |
+
+Results vary by scene, hardware, GPU load and shader cache.
+
+<details>
+<summary>Per-scene results</summary>
+
+Chrome 156, WebGPU, 1280×720, full-frame rendering without tiling, 3 bounces, denoising off. Render time is 32 samples after warmup, excluding loading, preparation and shader compilation, and waits for GPU completion. Each run uses the median of three measurements; results are medians of three runs. M4 Max shader compilation times are from the previous measurements. Values are v0.1.5 → v0.2.0 in seconds.
+
+Windows uses driver 617.42, comparing `a646620` → `08d6c63`, with `maxTiles=1`, Sobol sampling, atlas textures and 8 samples per batch. Each process warms up for 8 samples before three 32-sample renders; timings include scheduling and post-processing but exclude pixel readback. Fresh profiles, disabled shader disk caching and unique shader function names do not guarantee an empty driver cache. Across the three Windows rounds, compilation reductions ranged from 74.5% to 74.7%, and render-time reductions from 40.6% to 40.9%.
+
+| Scene | M4 Max compile | M4 Max render | RTX 4060 compile | RTX 4060 render |
+| --- | ---: | ---: | ---: | ---: |
+| Classroom 2 | 2.32 → 1.15 | 3.49 → 2.52 | 8.082 → 2.154 | 7.181 → 5.153 |
+| Bathroom | 2.34 → 1.01 | 3.20 → 2.49 | 8.043 → 1.913 | 5.343 → 3.801 |
+| BMW M6 | 2.13 → 0.88 | 1.55 → 0.97 | 7.210 → 1.490 | 2.870 → 1.524 |
+| House | 2.15 → 0.93 | 1.63 → 1.30 | 7.238 → 1.603 | 4.468 → 2.167 |
+| Kitchen | 2.12 → 0.92 | 2.69 → 1.98 | 7.247 → 1.750 | 5.832 → 3.065 |
+| Blender Cover Remix | 2.35 → 1.15 | 1.34 → 0.91 | 8.193 → 2.422 | 2.078 → 1.437 |
+| LEGO Technic Bugatti Chiron | 2.13 → 1.01 | 1.46 → 1.15 | 7.109 → 1.807 | 4.142 → 2.026 |
+| 2025 Yamaha MT-09 SP V4 | 2.34 → 1.16 | 1.97 → 1.62 | 8.176 → 2.401 | 4.446 → 3.005 |
+| Gelatinous Cube | 2.31 → 1.15 | 2.60 → 2.02 | 8.104 → 2.403 | 5.025 → 3.390 |
+| Dragon | 2.16 → 1.03 | 1.76 → 1.32 | 7.574 → 1.886 | 3.896 → 1.904 |
+
+Earlier Windows 360p timings included excessive tile submissions in Classroom 2 and Kitchen. This rerun disables tiling in both versions to exclude that scheduling issue from the comparison.
+
+</details>
+
+### Added
+
+- Surface AOVs (`render.aovs`, `aovSamples`): depth, position, ID, motion and directional reflectance, on WebGPU and WebGL 2. View them with `display.channel`, read them back, or pass them to a custom denoiser.
+- `render.refine(kind)` traces a single AOV without adding beauty samples.
+- `batchSamples` lets one `refine()` call submit several samples within its time budget, so still renders are no longer limited to one sample per frame. Thanks to [@cedricpinson](https://github.com/cedricpinson) for the report and prototype ([#11](https://github.com/pissang/mutracer/issues/11)).
+- `ProceduralSky`: clear-sky environment textures.
+- `EquirectBackground` with `intensity` and rotation, synced from Three.js `backgroundIntensity` and `backgroundRotation`. Thanks to [@cedricpinson](https://github.com/cedricpinson) for the rotation report and proposed fix ([#9](https://github.com/pissang/mutracer/issues/9)).
+- Experimental WebGPU bindless material textures (`textureBinding: 'auto'`), falling back to the texture atlas.
+
+### Changed
+
+- SDR display and denoising use exact sRGB encoding on all backends instead of the browser's gamma 2.2 approximation. Dark and midtone pixels may look slightly different.
+- Progressive denoising updates are at least 500 ms apart.
+
+### Deprecated
+
+- `allowMultipleSamplesPerFrame`; use `batchSamples`.
+
+### Fixed
+
+- Public TypeScript declarations resolve under NodeNext module resolution with `skipLibCheck` off.
+- Shadow catcher contact shadows no longer weaken under environment light from below the receiver, or near emissive meshes on WebGPU. Thanks to [@cedricpinson](https://github.com/cedricpinson) for the emissive-mesh report and proposed fix ([#10](https://github.com/pissang/mutracer/issues/10)).
+- WebGL 2 waits for asynchronously compiled shaders before drawing.
+- Diagnostic channels show their original images without color denoising; native albedo display now matches the browser.
+- Native HDR presentation applies JNLM to extended-range output and can show completed display-linear denoising results.
+
+## 0.1.5 - 2026-10-22
+
+### Fixed
+
+- Coat normals no longer inherit the base normal map. Assign the same texture to both maps to perturb both layers. Thanks to [@BruceCherniak](https://github.com/BruceCherniak) ([#8](https://github.com/pissang/mutracer/issues/8)).
+
+## 0.1.4 - 2026-10-21
+
+### Added
+
+- Environment and grounded skybox intensity and rotation, synchronized from Three.js scenes.
+- Per-axis texture wrapping (repeat, clamp-to-edge, mirrored-repeat).
+- Explicit sRGB or linear decoding for color textures, preserved from Three.js.
+
+### Fixed
+
+- Three.js conversion keeps vertex colors. Thanks to [@zz85](https://github.com/zz85) ([#7](https://github.com/pissang/mutracer/issues/7)).
+- Three.js conversion keeps back-side materials and half-float or R/RG/RGB/RGBA data textures.
+- Converted equirectangular environments match Three.js orientation. Thanks to [@zz85](https://github.com/zz85) ([#6](https://github.com/pissang/mutracer/issues/6)).
+- Fully metallic glTF materials without a metalness map ignore specular settings, as in glTF. Thanks to [@BruceCherniak](https://github.com/BruceCherniak) ([#4](https://github.com/pissang/mutracer/issues/4)).
+- Spot light falloff between the inner and outer cones. Thanks to [@zz85](https://github.com/zz85) ([#5](https://github.com/pissang/mutracer/issues/5)).
 
 ## 0.1.3 - 2026-10-19
 
 ### Changed
 
-- Installing the library no longer pulls in `webgpu-utils`.
+- `webgpu-utils` is no longer a dependency.
 
 ### Fixed
 
-- Adding untextured lights after a scene update works correctly on WebGPU and WebGL 2.
-- WebGPU shadow catchers blend seamlessly into opaque flat backgrounds at receiver edges, including with bloom and HDR output.
-- WebGPU OIDN denoising reduces colored artifacts around foreground silhouettes over shadow catchers with textured or translucent backgrounds.
+- Adding untextured lights after a scene update. Thanks to [@ertugrulerkan](https://github.com/ertugrulerkan) ([#1](https://github.com/pissang/mutracer/issues/1)).
+- WebGPU shadow catcher edges over opaque flat backgrounds, and OIDN artifacts around silhouettes over shadow catchers.
 
 ## 0.1.2 - 2026-10-16
 
 ### Added
 
-- WebGPU displacement supports `displacementBias` (default `0`) for signed height offsets in mesh-local units, including conversion from Three.js materials.
+- `displacementBias` (default `0`) for signed displacement offsets on WebGPU.
 
 ### Changed
 
-- `displacementStepSize` now defaults to `0`, automatically using 1/32 of the absolute displacement height. Set `0.01` explicitly to retain the previous fixed step; smaller steps capture finer detail at a higher rendering cost.
-- Converting a Three.js material without a displacement map now uses MuTracer's default height of `0.1` instead of Three.js's inactive default of `1`. Other configured heights are preserved.
+- `displacementStepSize` defaults to `0` (1/32 of the displacement height). Set `0.01` for the previous behavior.
+- Three.js materials without a displacement map convert with MuTracer's default height `0.1` instead of `1`.
 
 ### Fixed
 
-- Editing displacement maps, image sources or height settings updates the rendered surface correctly, including meshes that share geometry.
-- Displacement remains consistent when object transforms scale the mesh, including small displacement heights.
-- WebGL 2 renders the original surface correctly when displacement settings are present; displacement requires WebGPU.
-- Clicking or holding a stationary view with Three.js controls preserves accumulated samples and completed renders.
+- Displacement updates after map, image or height edits, including shared geometry, and stays consistent under scaled transforms.
+- WebGL 2 renders the undisplaced surface when displacement settings are present.
+- Stationary clicks with Three.js controls keep accumulated samples.
 
 ## 0.1.1 - 2026-10-14
 
 ### Changed
 
-- Interactive previews adapt resolution to tracing, denoising and display latency.
+- Interactive previews adapt resolution to frame latency.
 
 ### Fixed
 
-- Denoised previews remain responsive and finish during continuous interaction, with stable transitions to the final render.
-- Three.js camera controls settle reliably and account for elapsed time when damping.
-- Animation and incremental geometry updates retain prepared BVHs.
-- Shadow catcher denoising receives auxiliary albedo and normal guides on both WebGPU and WebGL 2, reducing color artifacts.
+- Denoised previews stay responsive during interaction and transition smoothly to the final render.
+- Three.js camera damping settles reliably.
+- Animation and incremental geometry updates keep prepared BVHs.
+- Shadow catcher denoising uses albedo and normal guides.
 
 ## 0.1.0 - 2026-10-14
 
 ### Added
 
-- Progressive browser path tracing on WebGPU with a WebGL 2 fallback.
-- Area, sphere, spot/IES, directional and environment lights with multiple importance sampling.
-- OpenPBR 1.1 materials including coat, fuzz, thin film, transmission, subsurface and emission.
-- Static BLAS construction in a Worker with the TypeScript binned SAH builder or optional TinyBVH WebAssembly, selectable `bvhLayout`, and instance-transform refits.
-- OIDN denoising for final images and converging previews; bundled standard/small networks and an independent complete weights package.
-- Three.js scene conversion and retained synchronization with THREESceneSync.
+- Progressive path tracing on WebGPU with a WebGL 2 fallback.
+- Area, sphere, spot/IES, directional and environment lights with MIS.
+- OpenPBR 1.1 materials.
+- Worker-built static BVHs (TypeScript SAH or TinyBVH WebAssembly) with instance refits.
+- OIDN denoising for previews and final images.
+- Three.js scene conversion and synchronization with `THREESceneSync`.
 - Sobol, ZSobol and random sampling, deterministic offline rendering and adaptive sampling.
 - Tone mapping, color grading, bloom, shadow catchers, transparent backgrounds and depth of field.
-- API documentation, procedural examples and a viewer for exploring scenes and exporting images.

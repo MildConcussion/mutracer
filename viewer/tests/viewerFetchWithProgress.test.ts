@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchWithProgress } from '../src/engine/fetchWithProgress';
 
-const sample = 'https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/yamaha-mt-09/model.glb';
-const origin = 'https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/yamaha-mt-09/model.glb';
+const sample = 'https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/yamaha-mt-09/model.glb';
 
 describe('viewer downloads', () => {
   beforeEach(() => vi.useFakeTimers());
@@ -21,22 +20,58 @@ describe('viewer downloads', () => {
     expect(progress).toHaveBeenLastCalledWith(3, 3);
   });
 
-  it('uses the same repository path and ref on GitHub after repeated CDN failures', async () => {
+  it('retries the same GitHub path and ref after transient failures', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(null, { status: 503 }))
       .mockRejectedValueOnce(new TypeError('Failed to fetch'))
       .mockResolvedValueOnce(new Response('model'));
     vi.stubGlobal('fetch', fetchMock);
-    const result = fetchWithProgress(sample.replace('@main', '@v0.1.0'));
+    const pinned = sample.replace('/main/', '/v0.1.0/');
+    const result = fetchWithProgress(pinned);
     await vi.runAllTimersAsync();
     expect(new TextDecoder().decode(await result)).toBe('model');
-    expect(fetchMock.mock.calls[2][0]).toBe(origin.replace('/main/', '/v0.1.0/'));
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([pinned, pinned, pinned]);
   });
 
   it('does not retry missing files', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
     vi.stubGlobal('fetch', fetchMock);
     await expect(fetchWithProgress(sample)).rejects.toThrow(`404 request failed: ${sample}`);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  const lfsRaw = 'https://raw.githubusercontent.com/ErfanMo77/gltf-research-scenes/main/scenes/test/mesh.bin';
+  const lfsMedia = lfsRaw.replace('raw.githubusercontent.com/', 'media.githubusercontent.com/media/');
+  const pointer = `version https://git-lfs.github.com/spec/v1\noid sha256:${'a'.repeat(64)}\nsize 3\n`;
+
+  it('resolves GitHub LFS pointers and reports progress for the real payload', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(pointer))
+      .mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3]), { headers: { 'content-length': '3' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const progress = vi.fn();
+    expect(new Uint8Array(await fetchWithProgress(lfsRaw, progress))).toEqual(new Uint8Array([1, 2, 3]));
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([lfsRaw, lfsMedia]);
+    expect(progress).toHaveBeenCalledWith(0, 0);
+    expect(progress).toHaveBeenLastCalledWith(3, 3);
+  });
+
+  it('retries the LFS media download after a transient failure', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(pointer))
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(new Response('abc'));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = fetchWithProgress(lfsRaw);
+    await vi.runAllTimersAsync();
+    expect(new TextDecoder().decode(await result)).toBe('abc');
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([lfsRaw, lfsMedia, lfsMedia]);
+  });
+
+  it('leaves LFS-like contents from other servers untouched', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(pointer));
+    vi.stubGlobal('fetch', fetchMock);
+    expect(new TextDecoder().decode(await fetchWithProgress('https://example.com/mesh.bin'))).toBe(pointer);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -50,7 +85,7 @@ describe('viewer downloads', () => {
     const failure = expect(fetchWithProgress(url)).rejects.toThrow('503');
     await vi.runAllTimersAsync();
     await failure;
-    expect(fetchMock.mock.calls.map(([address]) => address)).toEqual([url, url, url === sample ? origin : url]);
+    expect(fetchMock.mock.calls.map(([address]) => address)).toEqual([url, url, url]);
   });
 
   it('cancels a pending retry immediately when the caller aborts', async () => {

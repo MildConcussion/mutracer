@@ -3,24 +3,31 @@ import {
   Button, Dialog, DialogTrigger, Heading, Menu, MenuItem, MenuTrigger, Modal, ModalOverlay, Popover, Separator
 } from 'react-aria-components';
 import {
-  ChevronDown, Code2, Download, FileUp, Folder, Globe, HelpCircle, Link, MoreHorizontal, PanelLeft, PanelRight, Redo2, RotateCcw, Sparkles, Undo2, Upload, X
+  ChevronDown, Code2, Download, FileUp, Folder, Globe, HelpCircle, Link, MoreHorizontal, PanelLeft, PanelRight, Redo2, RotateCcw, Undo2, Upload, X
 } from 'lucide-react';
 import { setUi, useViewer } from '../store';
 import { getEngine } from '../engine/ViewerEngine';
-import { MODEL_PRESETS } from '../engine/presets';
 import { toPathedFiles } from '../engine/loadModel';
 import { redo, undo } from '../history';
 import { BrandMark } from './BrandMark';
+import { ExamplesMenu } from './ExamplesBrowser';
 
 export function Toolbar({ mobile }: { mobile: boolean }) {
   const backend = useViewer((s) => s.backend);
   const ui = useViewer((s) => s.ui);
+  const developmentVersion = location.hostname === 'mutracer-dev.meimu-studio.com'
+    || (location.hostname.startsWith('mutracer-dev.') && location.hostname.endsWith('.workers.dev'));
   return (
     <header className="header">
       <div className="brand">
         <a className="brand__home" href="../" title="MuTracer home">
           <BrandMark />
-          <div><strong>{mobile ? 'MuTracer' : 'MuTracer Viewer'}</strong><small>PATH TRACER</small></div>
+          <span className="brand__name">
+            <strong>{mobile ? 'MuTracer' : 'MuTracer Viewer'}</strong>
+            {developmentVersion && <span className="brand__version" title="This is a development version.">
+              {mobile ? 'Development' : 'Development version'}
+            </span>}
+          </span>
         </a>
         <span className="divider hide-m" />
         <button className="icon-btn icon-btn--bare sm hide-m" aria-label="Toggle scene panel" title="Toggle scene panel ([)"
@@ -28,7 +35,7 @@ export function Toolbar({ mobile }: { mobile: boolean }) {
       </div>
       <div className="header__center">
         <OpenMenu />
-        <ExamplesMenu />
+        <ExamplesMenu mobile={mobile} />
       </div>
       <div className="header__right">
         <HistoryButtons />
@@ -182,36 +189,6 @@ function UrlDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open:
         </Dialog>
       </Modal>
     </ModalOverlay>
-  );
-}
-
-function ExamplesMenu() {
-  const current = useViewer((s) => s.model?.presetId);
-  return (
-    <DialogTrigger>
-      <Button className="btn" aria-label="Examples"><Sparkles size={15} /><span className="hide-xs">Examples</span><ChevronDown size={13} className="chev" /></Button>
-      <Popover className="popover examples" offset={8}>
-        <Dialog aria-label="Examples">
-          {({ close }) => (
-            <>
-              <h4>Examples <span>Khronos &amp; Sketchfab · loaded on demand</span></h4>
-              <div className="ex-grid">
-                {MODEL_PRESETS.map((preset) => (
-                  <button key={preset.id} className="ex" data-on={current === preset.id || undefined}
-                    onClick={() => { void getEngine()?.loadPreset(preset.id); close(); }}>
-                    <span className="thumb"><img src={preset.thumbnail} alt="" loading="lazy" /></span>
-                    <div>
-                      <b>{preset.name}</b>
-                      <small><span className="tag">{preset.tag}</span><span>{preset.license}{preset.sizeMB ? ` · ${preset.sizeMB} MB` : ''}</span></small>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-        </Dialog>
-      </Popover>
-    </DialogTrigger>
   );
 }
 

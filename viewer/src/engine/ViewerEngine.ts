@@ -1,12 +1,12 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
-  Engine, Render, RenderLoop, Sync,
+  Engine, Render, RenderLoop, Sync, ProceduralSky,
   THREESync, type DisplaySettings,
   fromTHREECamera,
 } from '@meimu/mutracer';
-import { DEFAULT_SETTINGS, autoGroundedSkybox, resetSettings, setSettings, useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
-import { Environment, createSky, loadHDR, parseHDR } from './environment';
+import { VIEWER_AOVS, DEFAULT_SETTINGS, autoGroundedSkybox, resetSettings, setSettings, useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
+import { Environment, loadHDR, parseHDR, type EquirectData } from './environment';
 import { ENVIRONMENT_PRESETS, MODEL_PRESETS, environmentUrl } from './presets';
 import {
   createMaterialSpheres, isHDRFile, loadModelFromFiles, loadModelFromURL, loadModelFromSource,
@@ -20,10 +20,11 @@ import { isMaterialXFile } from './droppedFiles';
 export const MATERIALX_IMPORT = import.meta.env.DEV;
 import { displacementHeightRange } from './displacementHeightRange';
 import { downloadPolyHavenMap, polyHavenMaps, type TextureResolution } from './polyHaven';
+import type { TextureSampling } from './modelCache';
 import { clearMaterialEdits, clearModelCache, readModelCache, saveModelCache, type CachedModel } from './modelCache';
 import { MaterialEditor, readPendingEdits, type PendingEdits } from './materialEditor';
 import { cameraSettings, readCameraState, writeCameraState } from './cameraState';
-import { URL_SETTINGS_FIELDS } from '../urlSettings';
+import { readURLSettings, URL_SETTINGS_FIELDS } from '../urlSettings';
 import { readModelCamera } from './modelCamera';
 import { pushHistory, recordGroup } from '../history';
 import { groundModel } from './modelGrounding';
@@ -45,6 +46,8 @@ export interface ExportOptions {
 const OIDN_WEIGHTS = new URL('/oidn/weights/', document.baseURI).href;
 const get = useViewer.getState;
 const set = useViewer.setState;
+const INITIAL_LIGHTING = Object.fromEntries(Object.entries(readURLSettings())
+  .filter(([key]) => ['lighting', 'envId', 'envIntensity', 'envRotation'].includes(key)));
 
 type ViewCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
 const isOrthographic = (camera: THREE.Object3D): camera is THREE.OrthographicCamera =>
@@ -76,7 +79,9 @@ export class ViewerEngine {
   private readonly controls: OrbitControls;
   private readonly ground: THREE.Mesh;
   private readonly modelGroup = new THREE.Group();
-  private readonly environment = new Environment(createSky());
+  private readonly sky = new ProceduralSky({ time: get().settings.skyTime });
+  private readonly environment = new Environment({ data: new Float32Array([0, 0, 0, 1]), width: 1, height: 1 });
+  private modelEnvironment: Environment | null = null;
   private readonly studioAmbient = new Environment(createStudioAmbient());
   private readonly studioRig = new THREE.Group();
   private sync: THREESync;
@@ -105,6 +110,7 @@ export class ViewerEngine {
   private modelId: string | null = null;
   private cameraSaveTimer: ReturnType<typeof setTimeout> | undefined;
   private envToken = 0;
+  private envAbort?: AbortController;
   private dragging = false;
   private awaitingFirstSample = false;
   private exporting = false;
@@ -131,7 +137,7 @@ export class ViewerEngine {
     this.engine = new Engine({canvas, backend: new URLSearchParams(location.search).has('webgl') ? 'webgl' : 'auto'});
     this.preview = new Render(this.engine, {resolutionScale: .5, timeBudgetMs: 80, adaptiveResolution: {targetFrameMs: 80, minScale: .125}, maxSamples: 1,
       bounces: 2, bevel: false, dispersionWavelengths: 1, directLightCandidates: 2});
-    this.final = new Render(this.engine, {fallback: this.preview});
+    this.final = new Render(this.engine, {fallback: this.preview, batchSamples: true});
     this.engine.on('error', error => showToast(`Rendering failed: ${error.message}`, 'error'));
 
     this.scene.add(this.modelGroup);
@@ -149,6 +155,7 @@ export class ViewerEngine {
     this.controls.dampingFactor = 0.2;
     this.controls.addEventListener('start', () => {
       this.dragging = true;
+      this.beginOrbit();
     });
     this.controls.addEventListener('change', () => {
       if (get().paused) set({ paused: false });
@@ -200,7 +207,7 @@ export class ViewerEngine {
     clearTimeout(this.denoiserUpdateTimer);
     this.saveCamera();
     ++this.loadToken;
-    ++this.envToken;
+    this.cancelEnvironmentDownload();
     window.removeEventListener('pagehide', this.saveCamera);
     window.removeEventListener('pagehide', this.flushMaterials);
     this.materials.flush();
@@ -246,6 +253,7 @@ export class ViewerEngine {
     const restored = restoreCamera ? { id: `preset:${preset.id}`, meta: { name: preset.name, ...meta } } : undefined;
     return this.load(preset.name, async (progress) => {
       const model = preset.url ? await loadModelFromURL(preset.url, progress) : createMaterialSpheres();
+      if (preset.category === 'research' && model.lighting) model.lighting.useByDefault = true;
       if (preset.camera) model.root.userData.mutracerCamera = preset.camera;
       return model;
     }, meta, restored);
@@ -296,7 +304,7 @@ export class ViewerEngine {
   ) {
     const token = ++this.loadToken;
     this.awaitingFirstSample = false;
-    set({ loading: { name, stage: 'download', loaded: 0, total: 0 } });
+    set({ loading: { name, stage: 'download', loaded: 0, total: 0 }, toast: null });
     let model: LoadedModel;
     try {
       model = await loader((stage, loaded = 0, total = 0) => {
@@ -320,7 +328,18 @@ export class ViewerEngine {
     this.materials.flush();
     this.modelId = null; // Fit must not overwrite the saved view before restoration.
     this.setModel(model, edits);
-    if (restored) this.restoreCamera(id);
+    const cameraRestored = restored ? this.restoreCamera(id) : false;
+    const researchScene = MODEL_PRESETS.find((preset) => preset.id === meta.presetId)?.category === 'research';
+    if (researchScene) setSettings({ groundShadow: false }, { record: false });
+    const authoredLighting = model.lighting?.available && model.lighting.useByDefault !== false;
+    if (authoredLighting && !cameraRestored) {
+      set({ settings: { ...get().settings, lighting: 'environment', envId: 'model', envIntensity: 1, envRotation: 0,
+        ...(restored ? INITIAL_LIGHTING : {}) } });
+      // A pending custom HDRI can exist even when the selection was already 'model'.
+      if (get().settings.envId === 'model') this.cancelEnvironmentDownload();
+    } else if ((!model.lighting?.available || !cameraRestored && !authoredLighting) && get().settings.envId === 'model') {
+      set({ settings: { ...get().settings, envId: 'sky', envIntensity: 1, envRotation: 0 } });
+    }
     this.modelId = id;
     this.materials.modelId = id;
     if (!edits) void clearMaterialEdits();
@@ -330,6 +349,18 @@ export class ViewerEngine {
     });
     this.awaitingFirstSample = true;
     writeHash(this.settings, meta.presetId);
+    if (!cameraRestored && this.modelCameras.length) {
+      if (researchScene) {
+        setSettings({ cameraIndex: 0 });
+      } else {
+        const count = this.modelCameras.length;
+        // An old prompt must never select a camera in a replacement model.
+        const valid = () => token === this.loadToken && model === this.model;
+        showToast(`This model includes ${count === 1 ? 'a camera' : `${count} cameras`}. Apply ${count === 1 ? 'it' : 'the first'}?`, 'info', [
+          { label: 'Apply camera', onClick: () => { if (valid()) setSettings({ cameraIndex: 0 }); } }
+        ]);
+      }
+    }
     this.saveCamera();
     if (persist) {
       if (model.source || meta.presetId) await saveModelCache({ id, meta: { name, ...meta }, source: model.source });
@@ -341,6 +372,9 @@ export class ViewerEngine {
   private setModel(model: LoadedModel, edits: PendingEdits | null = null) {
     this.clearModel();
     this.model = model;
+    if (model.lighting?.available) this.modelEnvironment = new Environment(model.lighting.environment ?? {
+      width: 1, height: 1, data: new Float32Array([0, 0, 0, 1])
+    });
     const root = model.root;
     this.materials.setModel(root, edits);
     // Stand the model on the ground at the origin; keep its units.
@@ -391,11 +425,11 @@ export class ViewerEngine {
       tree,
       sceneInfo: { meshes, triangles, materials: materialIds.size },
       cameras: this.modelCameras.map((c, i) => c.name || `Camera ${i + 1}`),
+      modelLighting: model.lighting ? { available: model.lighting.available, warnings: model.lighting.warnings } : null,
       selection: { objectId: null, materialId: null },
       material: null,
       selectionRect: null
     });
-    if (this.settings.cameraIndex >= this.modelCameras.length) useViewer.setState((s) => ({ settings: { ...s.settings, cameraIndex: -1 } }));
   }
 
   /** Frames the model, or uses the view stored with it. */
@@ -437,6 +471,8 @@ export class ViewerEngine {
   }
 
   private clearModel() {
+    this.modelEnvironment?.dispose();
+    this.modelEnvironment = null;
     if (!this.model) return;
     this.mixer?.stopAllAction();
     this.mixer = null;
@@ -466,6 +502,7 @@ export class ViewerEngine {
     const owner = this;
     return new THREESync(this.engine, {
       scene: this.scene, get camera() {return owner.activeCamera();}, controls: this.controls,
+      get environment() { return owner.settings.lighting !== 'studio' && owner.settings.envId === 'sky' ? owner.sky : undefined; },
       get updateControls() {return owner.settings.cameraIndex < 0;},
       onMeshConverted: (mesh, source, group) => {
         if (source === this.ground) return;
@@ -479,10 +516,13 @@ export class ViewerEngine {
 
   private async applyEnvironmentPreset(id: string) {
     const preset = ENVIRONMENT_PRESETS.find((p) => p.id === id);
-    if (!preset) return; // 'custom': pixels were set directly
+    if (!preset) {
+      this.cancelEnvironmentDownload();
+      return; // Scene lighting or custom pixels are already available.
+    }
     const url = environmentUrl(preset, this.settings.envResolution);
     if (!url) {
-      this.setEnvironmentData(createSky(), id);
+      this.applySky(id);
       return;
     }
     const name = `${preset.name} ${this.settings.envResolution.toUpperCase()}`;
@@ -492,6 +532,12 @@ export class ViewerEngine {
       showToast(`Could not load ${preset.name}: ${(error as Error).message}. Using the procedural sky.`, 'error');
       useViewer.setState((s) => ({ settings: { ...s.settings, envId: 'sky' } }));
     }
+  }
+
+  private applySky(_id: string) {
+    this.cancelEnvironmentDownload();
+    this.sky.time = this.settings.skyTime;
+    this.applyBackground();
   }
 
   private async loadEnvironmentFromURL(url: string) {
@@ -504,25 +550,36 @@ export class ViewerEngine {
 
   /** Downloads an .hdr with progress. Resolves quietly when a newer request supersedes it. */
   private async downloadEnvironment(url: string, id: string, name: string) {
-    const token = ++this.envToken;
+    this.cancelEnvironmentDownload();
+    const token = this.envToken;
+    const controller = new AbortController();
+    this.envAbort = controller;
     const current = () => token === this.envToken;
     set({ envLoading: { id, name, loaded: 0, total: 0 } });
     try {
       const data = await loadHDR(url, (loaded, total) => {
         if (current()) set({ envLoading: { id, name, loaded, total } });
-      });
+      }, controller.signal);
       if (current()) this.setEnvironmentData(data, id);
     } catch (error) {
       if (current()) {
         set({ envLoading: null });
         throw error;
       }
+    } finally {
+      if (this.envAbort === controller) this.envAbort = undefined;
     }
   }
 
-  private setEnvironmentData(data: ReturnType<typeof createSky>, id: string) {
+  private cancelEnvironmentDownload() {
     this.envToken++;
+    this.envAbort?.abort();
+    this.envAbort = undefined;
     set({ envLoading: null });
+  }
+
+  private setEnvironmentData(data: EquirectData, id: string) {
+    this.cancelEnvironmentDownload();
     this.environment.setSource(data);
     this.applyBackground();
     if (get().settings.envId !== id) useViewer.setState((s) => ({ settings: { ...s.settings, envId: id } }));
@@ -532,21 +589,25 @@ export class ViewerEngine {
   private applyBackground() {
     const { background, backgroundColor, groundedHeight, groundedRadius, lighting } = this.settings;
     const studio = lighting === 'studio';
-    const environment = studio ? this.studioAmbient.texture : this.environment.texture;
-    this.scene.environment = environment;
+    const environment = studio ? this.studioAmbient : this.settings.envId === 'model' && this.modelEnvironment ? this.modelEnvironment : this.environment;
+    const intensity = studio ? this.settings.studioAmbient : this.settings.envIntensity;
+    const rotation = studio ? 0 : this.settings.envRotation;
+    environment.apply(this.scene, intensity, rotation);
     this.studioRig.visible = studio;
     this.scene.userData.mutracerHiddenBackground = background === 'transparent';
     // Projects the environment onto a ground disc and dome around the model.
     // The studio ambient is a plain gradient, so it is shown as a backdrop.
     const grounded = autoGroundedSkybox(get().modelRadius, groundedHeight);
     this.scene.userData.mutracerGroundedSkybox = background === 'grounded' && !studio ? {
-      texture: environment,
+      texture: this.settings.envId === 'sky' ? this.sky : environment.texture,
+      intensity,
+      rotation: this.scene.environmentRotation.y,
       height: grounded.height,
       radius: groundedRadius ?? grounded.radius,
       groundHeight: 0
     } : undefined;
-    this.scene.background = background === 'environment' || background === 'grounded' ? environment
-      : background === 'color' ? new THREE.Color(backgroundColor) : null;
+    // An omitted background follows the environment's intensity and orientation.
+    this.scene.background = background === 'color' ? new THREE.Color(backgroundColor) : null;
   }
 
   /** Rebuilds the studio rect lights around the current model. */
@@ -564,9 +625,15 @@ export class ViewerEngine {
   // ---------------------------------------------------------------- settings
 
   private applySettings(s: Settings, prev: Settings | null) {
+    // Old links, saved settings or undo must not select an empty lighting setup.
+    if (s.envId === 'model' && this.model && !this.model.lighting?.available) {
+      setSettings({ envId: 'sky', envIntensity: 1, envRotation: 0 }, { record: false });
+      return;
+    }
     const changed = (key: keyof Settings) => !prev || prev[key] !== s[key];
     const r = this.final, display = this.engine.display;
     this.engine.bvhBuilder = s.bvhBuilder;
+    r.aovs = this.preview.aovs = VIEWER_AOVS.filter(kind => kind === s.output);
     r.maxSamples = s.maxSamples; r.bounces = s.bounces; r.resolutionScale = s.resolutionScale;
     r.samplingPattern = s.samplingPattern; r.clamping = s.clamping;
     this.preview.bounces = Math.min(2, s.bounces);
@@ -582,22 +649,24 @@ export class ViewerEngine {
       temperature: s.temperature, tint: s.tint,
       bloomIntensity: s.bloomIntensity, bloomThreshold: s.bloomThreshold, bloomRadius: s.bloomRadius,
       vignette: s.vignette, channel: s.output, shadowCatcherAlpha: s.groundOpacity,
+      aovDepthRange: [0, s.aovDepthFar], aovPositionScale: s.aovPositionScale,
+      aovMotionScale: s.aovMotionScale, aovIdComponent: s.aovIdComponent,
     };
     Object.assign(display, displaySettings);
     this.ground.visible = s.groundShadow;
     this.controls.autoRotate = s.autoRotate;
-    this.controls.enabled = s.cameraIndex < 0;
+    this.controls.enabled = true;
 
-    if ((changed('envId') || changed('envResolution')) && s.envId !== 'custom') void this.applyEnvironmentPreset(s.envId);
-    if (changed('envIntensity') || changed('envRotation')) this.environment.set(s.envIntensity, s.envRotation);
+    if ((changed('envId') || changed('envResolution') || (changed('skyTime') && s.envId === 'sky')) && s.envId !== 'custom') void this.applyEnvironmentPreset(s.envId);
     if (changed('studioPreset') || changed('studioIntensity') || changed('studioRotation') || changed('studioSize')) this.applyStudioRig();
-    if (changed('studioAmbient') || changed('studioAmbientColor')) {
+    if (changed('studioAmbientColor')) {
       // THREE.Color converts the sRGB hex to linear RGB.
       const tint = new THREE.Color(s.studioAmbientColor);
-      this.studioAmbient.set(s.studioAmbient, 0, [tint.r, tint.g, tint.b]);
+      this.studioAmbient.setTint([tint.r, tint.g, tint.b]);
     }
-    if (changed('lighting') || changed('background') || changed('backgroundColor') || changed('groundedHeight') ||
-      changed('groundedRadius')) this.applyBackground();
+    if (changed('lighting') || changed('envId') || changed('background') || changed('backgroundColor') || changed('groundedHeight') ||
+      changed('groundedRadius') || changed('envIntensity') || changed('envRotation') ||
+      changed('studioAmbient') || changed('studioAmbientColor')) this.applyBackground();
     if (changed('cameraIndex')) this.needsResize = true;
     // A focus distance set elsewhere (the slider, fitting) ends a running pull.
     if (prev && changed('focusDistance') && !this.writingFocus) {
@@ -630,6 +699,7 @@ export class ViewerEngine {
         void this.updateDenoiser();
       }
     }
+    if (s.autoRotate && s.cameraIndex >= 0) this.beginOrbit();
     if (prev && URL_SETTINGS_FIELDS.some(changed)) {
       writeHash(s, get().model?.presetId ?? null);
     }
@@ -713,7 +783,7 @@ export class ViewerEngine {
 
   private restoreCamera(modelId: string) {
     const saved = readCameraState(modelId);
-    if (!saved) return;
+    if (!saved) return false;
     // Flush any damping from fitting without rotating the saved view.
     this.controls.autoRotate = false;
     this.controls.enableDamping = false;
@@ -725,7 +795,8 @@ export class ViewerEngine {
     } }));
     const camera = this.camera;
     camera.position.fromArray(saved.position);
-    camera.up.fromArray(saved.up);
+    // Earlier versions saved a tilted up after orbiting from a scene camera.
+    camera.up.set(0, 1, 0);
     this.controls.target.fromArray(saved.target);
     camera.near = saved.near;
     camera.far = saved.far;
@@ -740,10 +811,62 @@ export class ViewerEngine {
     this.controls.enableDamping = true;
     this.controls.autoRotate = this.settings.autoRotate;
     this.needsResize = true;
+    return true;
   }
 
   private activeCamera(): ViewCamera {
     return this.modelCameras[this.settings.cameraIndex] ?? this.camera;
+  }
+
+  /** Starts an orbit gesture at the authored camera's current world-space view. */
+  private beginOrbit() {
+    const source = this.modelCameras[this.settings.cameraIndex];
+    if (!source) return;
+    source.updateWorldMatrix(true, false);
+    const position = source.getWorldPosition(new THREE.Vector3());
+    const quaternion = source.getWorldQuaternion(new THREE.Quaternion());
+    const direction = source.getWorldDirection(new THREE.Vector3());
+    const center = this.modelBounds().getCenter(new THREE.Vector3());
+    const depth = center.clone().sub(position).dot(direction);
+    const distance = depth > 1e-4 ? depth : Math.max(center.distanceTo(position), 1e-3);
+    const autoRotate = this.settings.autoRotate;
+    const damping = this.controls.enableDamping;
+    this.controls.autoRotate = false;
+    this.controls.enableDamping = false;
+    this.controls.update();
+    // Switch projection before copying the view, so its framing conversion
+    // cannot replace the authored pose. Keep the source camera untouched.
+    setSettings({ cameraIndex: -1, projection: isOrthographic(source) ? 'orthographic' : 'perspective',
+      ...(!isOrthographic(source) ? { fov: source.fov } : {}) });
+    if (isOrthographic(source)) this.orthographicCamera.copy(source, false);
+    else this.perspectiveCamera.copy(source, false);
+    const camera = this.camera;
+    camera.position.copy(position);
+    camera.quaternion.copy(quaternion);
+    // OrbitControls orbits around world +Y; a tilted up would roll every
+    // later frame. The view direction is kept and only authored roll is dropped.
+    camera.up.set(0, 1, 0);
+    camera.matrixAutoUpdate = true;
+    camera.matrixWorldAutoUpdate = true;
+    setAspect(camera, this.viewAspect());
+    this.controls.object = camera;
+    this.controls.target.copy(position).addScaledVector(direction, distance);
+    this.controls.autoRotate = false;
+    this.controls.enableDamping = false;
+    this.controls.update();
+    camera.updateMatrixWorld(true);
+    this.controls.enableDamping = damping;
+    this.controls.autoRotate = autoRotate;
+    this.needsResize = true;
+    this.requestAutofocus();
+  }
+
+  /** Applies a camera identified by its scene-tree object, including duplicate names. */
+  applyModelCamera(objectId: string) {
+    const index = this.modelCameras.findIndex((camera) => camera.uuid === objectId);
+    if (index < 0) return;
+    setSettings({ cameraIndex: index });
+    set({ toast: null });
   }
 
   private modelBounds() {
@@ -760,6 +883,9 @@ export class ViewerEngine {
    * `margin` is the fraction of the frame the model may fill.
    */
   fit(aspect?: number, margin = 0.85) {
+    // Fitting also leaves the selected model camera. A reload restores the saved
+    // camera only after the new model has been fitted.
+    setSettings({ cameraIndex: -1 });
     if (this.needsResize) this.resize();
     const box = this.modelBounds();
     const center = box.getCenter(new THREE.Vector3());
@@ -1009,6 +1135,10 @@ export class ViewerEngine {
     this.materials.setValues(materialId, values, label, mergeKey);
   }
 
+  setMaterialTextureSampling(materialId: string, slot: TextureKey, patch: Partial<TextureSampling>, label: string, mergeKey?: string) {
+    this.materials.setTextureSampling(materialId, slot, patch, label, mergeKey);
+  }
+
   /** Replaces the texture in a slot with an image file, or removes it with `null`. */
   async setMaterialTexture(materialId: string, slot: TextureKey, file: Blob | null, label: string) {
     try {
@@ -1134,7 +1264,7 @@ export class ViewerEngine {
         name: m.name || 'Material',
         color: (m as THREE.MeshStandardMaterial).color ? '#' + (m as THREE.MeshStandardMaterial).color.getHexString() : '#888'
       })) : [],
-      children: object.children.map((child) => this.buildTree(child))
+      children: object.children.filter((child) => !child.userData.mutracerMetadataLightTarget).map((child) => this.buildTree(child))
     };
   }
 
@@ -1212,7 +1342,7 @@ export class ViewerEngine {
   async downloadViewportImage() {
     if (this.exporting) return;
     try {
-      const samples = (this.displayed ?? this.final).samples;
+      const samples = this.displaySamples(this.displayed ?? this.final);
       if (samples === 0) throw new Error('The viewport has not rendered an image yet');
       const blob = await this.captureImage();
       this.downloadImage(blob, samples, 'viewport');
@@ -1251,13 +1381,20 @@ export class ViewerEngine {
     if (this.exporting) throw new Error('A render is already running');
     this.exporting = true; this.exportAbort = new AbortController();
     const background = this.settings.background;
-    const camera = this.activeCamera().clone(); setAspect(camera, options.width / options.height);
+    const source = this.activeCamera();
+    source.updateWorldMatrix(true, false);
+    const camera = source.clone();
+    // A detached clone must retain the model camera's full parent transform.
+    camera.matrixAutoUpdate = false;
+    camera.matrix.copy(source.matrixWorld);
+    setAspect(camera, options.width / options.height);
     let image: Render | undefined;
     set({export: {stage: 'final', samples: 0, target: options.samples}});
     try {
       if (options.transparent && background !== 'transparent') { this.settings = {...this.settings, background: 'transparent'}; this.applyBackground(); }
       this.sync.update(); this.viewSync.update(); this.engine.update();
       image = new Render(this.engine, {width: options.width, height: options.height,
+        aovs: this.final.aovs, aovSamples: this.final.aovSamples,
         maxSamples: options.samples, bounces: this.final.bounces, clamping: this.final.clamping,
         samplingPattern: this.final.samplingPattern, bevel: this.final.bevel, bevelSamples: this.final.bevelSamples,
         dispersionWavelengths: this.final.dispersionWavelengths, directLightCandidates: this.final.directLightCandidates,
@@ -1292,11 +1429,20 @@ export class ViewerEngine {
     const env = ENVIRONMENT_PRESETS.find((p) => p.id === s.envId);
     const grounded = autoGroundedSkybox(state.modelRadius, s.groundedHeight);
     const anim = state.animation;
+    const metadataLights: NonNullable<Parameters<typeof generateCode>[0]['metadataLights']> = [];
+    this.model?.root.traverse((object) => {
+      if (!object.userData.mutracerMetadataLight) return;
+      const light = object as THREE.DirectionalLight;
+      metadataLights.push({ color: [light.color.r, light.color.g, light.color.b], intensity: light.intensity,
+        position: light.getWorldPosition(new THREE.Vector3()).toArray(), target: light.target.getWorldPosition(new THREE.Vector3()).toArray() });
+    });
     return generateCode({
       settings: s,
       webgpu: this.engine.backend === 'webgpu',
       modelUrl: preset ? preset.url : state.model?.sourceUrl ?? null,
       environmentUrl: env ? environmentUrl(env, s.envResolution) : null,
+      blackEnvironment: s.envId === 'model' && !this.model?.lighting?.environment,
+      metadataLights,
       camera: {
         projection: isOrthographic(camera) ? 'orthographic' : 'perspective',
         fov: isOrthographic(camera) ? 0 : camera.fov,
@@ -1367,7 +1513,7 @@ export class ViewerEngine {
     const phase = this.loop.tick();
     this.publishLens(this.activeCamera());
     const shown = phase === 'previewing' ? this.preview : this.final;
-    if (shown.samples > 0) this.displayed = shown;
+    if (this.displaySamples(shown) > 0) this.displayed = shown;
     // Query only after the renderer uploads the current animation pose and
     // camera. Readback runs alongside subsequent frames.
     if (phase !== 'preparing' && phase !== 'compiling' && phase !== 'error') {
@@ -1377,8 +1523,12 @@ export class ViewerEngine {
     this.updateSelectionRect();
   };
 
+  private displaySamples(render: Render): number {
+    return VIEWER_AOVS.some(kind => kind === this.settings.output) ? render.aovSamplesRendered : render.samples;
+  }
+
   private publishStats(phase: RenderPhase, now: number, force: boolean) {
-    const samples = phase === 'previewing' ? 0 : this.final.samples;
+    const samples = phase === 'previewing' ? 0 : this.displaySamples(this.final);
     // Restarted accumulation (an edit, a camera move or an animation frame).
     if (samples < this.lastSamples || samples <= 1) this.sampleStart = now;
     // Time stops at the last added sample, so it freezes once rendering finishes.
@@ -1389,7 +1539,7 @@ export class ViewerEngine {
       // Preparation keeps the previous scene's accumulation alive. Only a
       // rendering phase can confirm that the newly loaded model has a sample.
       const hasNewSample = (samples > 0 && (phase === 'converging' || phase === 'denoising' || phase === 'finished')) ||
-        (phase === 'previewing' && (this.displayed?.samples ?? 0) > 0);
+        (phase === 'previewing' && (this.displayed ? this.displaySamples(this.displayed) : 0) > 0);
       if (hasNewSample || phase === 'error') {
         this.awaitingFirstSample = false;
         set({ loading: null });

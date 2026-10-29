@@ -56,6 +56,35 @@ describe('WGPURayTracePass output resource lifetime', () => {
     vi.unstubAllGlobals();
   });
 
+  it('compiles AOVs asynchronously and reuses geometry/reflection variants across targets', async () => {
+    vi.stubGlobal('GPUShaderStage', {COMPUTE: 4});
+    const compile = vi.fn(async () => ({} as GPUComputePipeline));
+    const synchronousCompile = vi.fn(() => { throw new Error('Synchronous compilation'); });
+    const device = {
+      createBindGroupLayout: () => ({}), createPipelineLayout: () => ({}),
+      createComputePipelineAsync: compile, createComputePipeline: synchronousCompile
+    } as unknown as GPUDevice;
+    const pass = Object.create(WGPURayTracePass.prototype) as Pick<WGPURayTracePass, keyof WGPURayTracePass> & Record<string, any>;
+    const final = {getBindGroupLayout: () => ({})}, preview = {getBindGroupLayout: () => ({})};
+    Object.assign(pass, {_device: device, _rayTracePipeline: final, _depthCompute: {module: {}, constants: {}},
+      _aovPipelines: new WeakMap(), _shaderCache: {createComputePipelineAsync: compile}});
+    expect(pass.prepareAovs(['depth'])).toBe(false);
+    expect(pass.prepareAovs(['id'])).toBe(false);
+    expect(compile).toHaveBeenCalledTimes(2);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(pass.prepareAovs(['motion'])).toBe(true);
+    pass._rayTracePipeline = preview;
+    expect(pass.prepareAovs(['depth'])).toBe(false);
+    expect(compile).toHaveBeenCalledTimes(4);
+    pass._rayTracePipeline = final;
+    expect(pass.prepareAovs(['depth'])).toBe(true);
+    expect(pass.prepareAovs(['diffuseAlbedo'])).toBe(false);
+    expect(compile).toHaveBeenCalledTimes(6);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(pass.prepareAovs(['specularAlbedo'])).toBe(true);
+    expect(synchronousCompile).not.toHaveBeenCalled();
+  });
+
   it('keeps every CPU uniform view aligned with the WGSL target options', () => {
     vi.stubGlobal('GPUShaderStage', { VERTEX: 1, FRAGMENT: 2, COMPUTE: 4 });
     const uniform = makeRayTraceUniform();
@@ -109,7 +138,10 @@ describe('WGPURayTracePass output resource lifetime', () => {
     expect(update()).toEqual([true, true, true]);
     geometry.tangent = undefined;
     expect(update()).toEqual([true, true, false]); // UV/fallback frame still works
+    material.normalMap = new Texture({width: 1, height: 1, data: new Uint8Array(4)});
     material.coatNormalMap = undefined;
+    expect(update()).toEqual([true, true, false]); // absent map retains the smooth coat frame
+    material.coatWeight = 0;
     expect(update()).toEqual([false, false, false]);
   });
 

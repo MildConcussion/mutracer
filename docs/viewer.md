@@ -1,4 +1,42 @@
-# Sharing viewer settings
+# Using the viewer
+
+Open **Examples → MuTracer collection** for models curated for this viewer, or
+**Examples → glTF Research Scenes** for the independently maintained
+[glTF Research Scenes](https://github.com/ErfanMo77/gltf-research-scenes) collection.
+Scenes download on demand from GitHub; cards show approximate download sizes
+and link to each scene's source and license. Large scenes need more memory.
+glTF Research Scenes load with **Ground shadow** off; you can enable it in Lighting.
+
+On desktop, choose **Pin to right panel** in Examples to keep the collection
+open while loading models. **Unpin examples** returns it to the popover.
+The pinned layout is saved in this browser.
+
+glTF/GLB imports include directional, point and spot lights and emissive meshes.
+Benchmark scenes also load their sunlight and available environment maps.
+Under **Lighting → Environment**, **Scene lighting** is available only when the
+model provides lights or environment lighting. Choose it to use the imported
+lighting alone, or select an HDRI or Studio to add lighting. Emissive materials
+still work with HDRI and Studio. Environment maps add download time and are
+resampled to at most 2K width. If a source map is missing, the model still opens
+and the Lighting panel explains which map is unavailable; choose an environment
+there to replace it.
+
+glTF Research Scenes automatically use their first camera when available.
+For other glTF/GLB imports with cameras, a toast offers **Apply camera** to
+use the first camera; dismiss it to keep the Orbit view. You can select any
+imported camera in the separate camera toolbar at the bottom right; it appears
+only for models with cameras. Drag, pan or zoom after selecting a camera to
+continue in **Orbit** from that view.
+Hover over a camera in the scene tree and click its camera action to apply it
+directly. **Fit to model** in the bottom toolbar (or **F**) returns to Orbit
+and frames the model.
+Reloading the current model restores your saved camera selection without
+showing the prompt again.
+
+Picking an object in the viewport reveals it in the scene tree and scrolls it
+into view. Material rows start collapsed; expand a mesh to see its materials.
+
+## Sharing viewer settings
 
 Add settings to a viewer link to override the recipient's saved preferences.
 For example, open the viewer with HDR output enabled:
@@ -17,7 +55,7 @@ The viewer updates the URL as lighting, render and display settings change.
 Copy the address bar to share those settings and the selected example model.
 Settings also work in the hash, such as `#model=dragon&hdrOutputEnabled=true`.
 
-## Options
+### Options
 
 Parameter names match the viewer settings and are case-sensitive:
 
@@ -42,7 +80,7 @@ can override a recipient's different preference. When the viewer updates the
 address, settings move into the hash; unrelated query parameters, including
 `?webgl`, are preserved.
 
-## Caveats
+### Caveats
 
 HDR output requires WebGPU, an HDR display and a compatible browser. Unsupported
 devices fall back to SDR. `?webgl` forces WebGL 2, which does not support HDR output.

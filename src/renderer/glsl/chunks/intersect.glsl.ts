@@ -576,6 +576,12 @@ void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric
   ivec2 i0 = unpackTexel(index.x, vertexColumns);
   ivec2 i1 = unpackTexel(index.y, vertexColumns);
   ivec2 i2 = unpackTexel(index.z, vertexColumns);
+  si.vertexColor = vec3(1.0);
+#ifdef USE_VERTEX_COLOR
+  si.vertexColor = barycentric.x * texelFetch(colorBuffer, i0, 0).rgb
+    + barycentric.y * texelFetch(colorBuffer, i1, 0).rgb
+    + barycentric.z * texelFetch(colorBuffer, i2, 0).rgb;
+#endif
 
   vec3 n0 = texelFetch(normalBuffer, i0, 0).xyz;
   vec3 n1 = texelFetch(normalBuffer, i1, 0).xyz;
@@ -650,15 +656,17 @@ void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric
     vec2 secondaryUv = vec2(0.0);
   #endif
 
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
   si.coatNormal = normal;
+#ifdef NUM_COAT_NORMAL_MAPS
   float coatNormalIndex = fetchMatData(si.materialIndex * MAT_DATA_SIZE + MAT_ROW_LAYER_MAPS).z;
+#endif
 #endif
   vec4 directionMaterial = fetchMatData(si.materialIndex * MAT_DATA_SIZE + MAT_ROW_DIRECTION_NORMAL);
   float coatRotation = fetchMatData(si.materialIndex * MAT_DATA_SIZE + MAT_ROW_FILM_TEXTURE).x;
   if (directionMaterial.x >= 0.0 || directionMaterial.y != 0.0 || coatRotation != 0.0
-#ifdef NUM_COAT_NORMAL_MAPS
-    || coatNormalIndex >= 0.0
+#ifdef USE_COAT_NORMAL_FRAMES
+    || fetchMatData(si.materialIndex * MAT_DATA_SIZE + MAT_ROW_COAT).w > 0.0
 #endif
   ) {
     vec3 dp1 = tri.p0 - tri.p2;
@@ -683,7 +691,7 @@ void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric
 #endif
     si.directionTangent = directionAxes[0];
     si.directionBitangent = directionAxes[1];
-#ifdef NUM_COAT_NORMAL_MAPS
+#if defined(USE_COAT_NORMAL_FRAMES) && defined(NUM_COAT_NORMAL_MAPS)
     if (coatNormalIndex >= 0.0) {
       int coatIndex = int(coatNormalIndex);
       mat2x3 coatAxes = geometryAxes;
@@ -925,7 +933,7 @@ ${getBVHTraverseCode(glsl`
     si.faceNormal = normalize(normalTransform * hitFaceNormal);
     si.vertexNormal = normalize(normalTransform * si.vertexNormal);
     si.normal = normalize(normalTransform * si.normal);
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
     si.coatNormal = normalize(normalTransform * si.coatNormal);
 #endif
 #ifdef USE_TANGENT
@@ -993,7 +1001,7 @@ ${getBVHTraverseCode(
     si.faceNormal = normalize(normalTransform * hitFaceNormal);
     si.vertexNormal = normalize(normalTransform * si.vertexNormal);
     si.normal = normalize(normalTransform * si.normal);
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
     si.coatNormal = normalize(normalTransform * si.coatNormal);
 #endif
 #ifdef USE_TANGENT

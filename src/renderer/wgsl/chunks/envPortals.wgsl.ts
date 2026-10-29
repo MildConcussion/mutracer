@@ -17,7 +17,18 @@ export const MAX_ENV_PORTALS = 16;
 /** Bytes of the EnvPortals uniform: six header vec4s, then three vec4s per rectangle. */
 export const ENV_PORTALS_UNIFORM_BYTES = (6 + 3 * MAX_ENV_PORTALS) * 16;
 
-export default /* wgsl */ `
+/**
+ * The portal chunk. `uniform`: the EnvPortals uniform at group 2, binding 3, which the browser pass binds; otherwise a
+ * zero private stand-in, so a pipeline layout without that binding (native) still compiles (HAS_ENV_PORTALS is then
+ * false and nothing reads it).
+ */
+export function createEnvPortalsWgsl(uniform = false) {
+  return envPortalsWgsl.replace('@@ENV_PORTALS_DECLARATION@@', uniform
+    ? '@group(2) @binding(3) var<uniform> envPortals: EnvPortals;'
+    : 'var<private> envPortals: EnvPortals;');
+}
+
+const envPortalsWgsl = /* wgsl */ `
 struct EnvPortals {
   // x: rectangle count, y: share of environment samples drawn through the rectangles, z: RIS target scale of a
   // distant light whose direction misses every rectangle, w: 1 when a point in the region is a room's (DirectSunInRoom)
@@ -38,7 +49,7 @@ struct EnvPortals {
   quads: array<vec4f, ${3 * MAX_ENV_PORTALS}>,
 }
 
-@group(2) @binding(3) var<uniform> envPortals: EnvPortals;
+@@ENV_PORTALS_DECLARATION@@
 
 // The rectangles' total weight at the vertex being shaded when its continuation is guided through them, else 0
 var<private> portalGuideTotal: f32 = 0.0;
@@ -161,7 +172,7 @@ fn sampleEnvLightFrom(p: vec3f, randomV2: vec2f, lightSample: ptr<function, Ligh
     var mapPdf: f32;
     dir = sampleEnvmap(vec2f((randomV2.x - share) / max(1.0 - share, 1e-6), randomV2.y), &mapUv, &mapPdf);
   }
-  let uv = cartesianToEquirect(dir);
+  let uv = environmentUv(dir);
   (*lightSample).direction = dir;
   (*lightSample).emission = textureLinear(envMap, uv).rgb;
   (*lightSample).dist = INF;
@@ -232,3 +243,5 @@ fn envPortalGuidedPdf(p: vec3f, dir: vec3f, bsdfPdf: f32) -> f32 {
   return share * envPortalsPdf(p, dir, portalGuideTotal) + (1.0 - share) * bsdfPdf;
 }
 `;
+
+export default createEnvPortalsWgsl(true);
