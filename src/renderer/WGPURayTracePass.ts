@@ -417,7 +417,7 @@ class WGPURayTracePass {
     });
     device.queue.writeTexture(
       { texture: this._openPbrEnergyLut },
-      getOpenPbrEnergyLutData(),
+      getOpenPbrEnergyLutData() as BufferSource,
       { bytesPerRow: OPENPBR_ENERGY_LUT_WIDTH * Float32Array.BYTES_PER_ELEMENT },
       {
         width: OPENPBR_ENERGY_LUT_WIDTH,
@@ -529,7 +529,7 @@ class WGPURayTracePass {
       this._device.queue.writeBuffer(
         previousBuffer,
         0,
-        previous?.variance ?? new Float32Array(1)
+        (previous?.variance ?? new Float32Array(1)) as BufferSource
       );
       ownsPreviousBuffer = true;
     }
@@ -1147,7 +1147,7 @@ class WGPURayTracePass {
       state.frame = packed.frame; state.setScene(packed.words, primitiveIds);
     }
     this._device.queue.writeBuffer(this._uniforms.rtUniform, 0, this._rtUniform.buffer);
-    this._device.queue.writeBuffer(this._uniforms.cameraUniform, 0, packCameraUniform(this._viewProjInv, this._cameraWorld, this._apertureRadius, this._focusDistance));
+    this._device.queue.writeBuffer(this._uniforms.cameraUniform, 0, packCameraUniform(this._viewProjInv, this._cameraWorld, this._apertureRadius, this._focusDistance) as BufferSource);
     const device = this._device;
     const run = (pipeline: GPUComputePipeline, sample: number) => {
       // A fresh uniform for each queued dispatch keeps batch samples independent.
@@ -1548,7 +1548,7 @@ class WGPURayTracePass {
     this._ensureAdaptiveSamplingTexture(width, height);
     this._device.queue.writeTexture(
       { texture: this._adaptiveSamplingTexture },
-      data,
+      data as BufferSource,
       { bytesPerRow: width * Float32Array.BYTES_PER_ELEMENT },
       [width, height]
     );
@@ -2004,7 +2004,7 @@ class WGPURayTracePass {
       if (!changed && startRow >= 0) {
         this._device.queue.writeTexture(
           { texture: this._lightSamplingTexture!, origin: [0, startRow] },
-          textureData.subarray(startRow * width * 4, row * width * 4),
+          textureData.subarray(startRow * width * 4, row * width * 4) as BufferSource,
           { bytesPerRow: width * 16 }, { width, height: row - startRow });
         startRow = -1;
       }
@@ -2585,7 +2585,7 @@ class WGPURayTracePass {
       this._uniforms.cameraUniform,
       0,
       packCameraUniform(this._viewProjInv, this._cameraWorld,
-        this._apertureRadius, this._focusDistance)
+        this._apertureRadius, this._focusDistance) as BufferSource
     );
   }
 

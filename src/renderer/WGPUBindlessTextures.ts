@@ -96,7 +96,7 @@ export class WGPUBindlessTextures {
         if (!reusable) created.push(gpu);
         if (!reusable || old.image !== texture.image || old.version !== texture.version || old.flipY !== texture.flipY || old.sourceWidth !== texture.image.width || old.sourceHeight !== texture.image.height) {
           const pixels = independentTexturePixels(texture, size, plan.floatStorage);
-          this.device.queue.writeTexture({texture: gpu}, pixels, {bytesPerRow: size.width * plan.bytesPerPixel}, [size.width, size.height]);
+          this.device.queue.writeTexture({texture: gpu}, pixels as BufferSource, {bytesPerRow: size.width * plan.bytesPerPixel}, [size.width, size.height]);
         }
         next.set(texture, {gpu, image: texture.image, version: texture.version, sourceWidth: texture.image.width, sourceHeight: texture.image.height, flipY: texture.flipY, format, ...size});
       });

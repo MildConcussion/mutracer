@@ -41,12 +41,12 @@ export class WGPUAov {
       this.scene = this.device.createBuffer({label: 'AOV identities/history', size: Math.max(16, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST});
       replaced = true;
     }
-    this.device.queue.writeBuffer(this.scene, 0, words);
+    this.device.queue.writeBuffer(this.scene, 0, words as BufferSource);
     // Primitive-cache arrays are immutable. Camera, material and rigid edits
     // update only the prefix; topology/storage replacements change the tail's
     // identity, and instance/material counts can move its byte offset.
     if (primitiveIds && (replaced || this.scenePrimitives !== primitiveIds || this.scenePrimitiveOffset !== words.byteLength)) {
-      this.device.queue.writeBuffer(this.scene, words.byteLength, primitiveIds);
+      this.device.queue.writeBuffer(this.scene, words.byteLength, primitiveIds as BufferSource);
     }
     this.scenePrimitives = primitiveIds; this.scenePrimitiveOffset = words.byteLength;
   }

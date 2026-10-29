@@ -1749,7 +1749,7 @@ width: renderWidth, height: renderHeight,
             shadow.set(input.moments.subarray(i * 4, i * 4 + 4), i * 12 + 8);
           }
           for (const [buffer, data] of [[buffers.color, input.color], [buffers.albedo, input.albedo],
-            [buffers.normal, input.normal], [buffers.shadowCatcher, shadow]] as const) device.queue.writeBuffer(buffer, 0, data);
+            [buffers.normal, input.normal], [buffers.shadowCatcher, shadow]] as const) device.queue.writeBuffer(buffer, 0, data as BufferSource);
           sampleCount = resolvedSamples = input.samples;
           resolvedHasShadowCatcher = input.catcher;
           isFirstFrame = false; postProcessPending = false; bloomSamples = 0;
